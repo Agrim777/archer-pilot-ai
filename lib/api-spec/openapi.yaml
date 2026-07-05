@@ -3,13 +3,26 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: ArcherPilot AI API specification
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: projects
+    description: Project management
+  - name: ai
+    description: AI generation and copilot
+  - name: archer-connections
+    description: Archer connection management
+  - name: deployments
+    description: Deployment engine
+  - name: dashboard
+    description: Dashboard statistics
+  - name: admin
+    description: Admin panel operations
+
 paths:
   /healthz:
     get:
@@ -24,6 +37,438 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  # ── Projects ───────────────────────────────────────────────────────────────
+  /projects:
+    get:
+      operationId: listProjects
+      tags: [projects]
+      summary: List all projects for the authenticated user
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [draft, deployed, archived]
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Project"
+    post:
+      operationId: createProject
+      tags: [projects]
+      summary: Create a new project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectInput"
+      responses:
+        "201":
+          description: Created project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+
+  /projects/{id}:
+    get:
+      operationId: getProject
+      tags: [projects]
+      summary: Get a project by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      operationId: updateProject
+      tags: [projects]
+      summary: Update a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectUpdate"
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+    delete:
+      operationId: deleteProject
+      tags: [projects]
+      summary: Delete a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /projects/{id}/duplicate:
+    post:
+      operationId: duplicateProject
+      tags: [projects]
+      summary: Duplicate a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "201":
+          description: Duplicated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+
+  /projects/{id}/versions:
+    get:
+      operationId: listProjectVersions
+      tags: [projects]
+      summary: List version history for a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of versions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectVersion"
+
+  /projects/{id}/export:
+    post:
+      operationId: exportProject
+      tags: [projects]
+      summary: Export a project in the specified format
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExportInput"
+      responses:
+        "200":
+          description: Export result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportResult"
+
+  # ── AI ─────────────────────────────────────────────────────────────────────
+  /ai/generate:
+    post:
+      operationId: generateArcherImplementation
+      tags: [ai]
+      summary: Generate a full Archer implementation from a natural-language prompt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateInput"
+      responses:
+        "200":
+          description: Generated Archer implementation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArcherImplementation"
+
+  /ai/copilot:
+    post:
+      operationId: sendCopilotMessage
+      tags: [ai]
+      summary: Send a message to the AI copilot (returns SSE stream)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CopilotInput"
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  # ── Archer Connections ──────────────────────────────────────────────────────
+  /archer-connections:
+    get:
+      operationId: listArcherConnections
+      tags: [archer-connections]
+      summary: List Archer connections for the authenticated user
+      responses:
+        "200":
+          description: List of connections
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ArcherConnection"
+    post:
+      operationId: createArcherConnection
+      tags: [archer-connections]
+      summary: Create a new Archer connection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArcherConnectionInput"
+      responses:
+        "201":
+          description: Created connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArcherConnection"
+
+  /archer-connections/{id}:
+    get:
+      operationId: getArcherConnection
+      tags: [archer-connections]
+      summary: Get an Archer connection
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArcherConnection"
+    put:
+      operationId: updateArcherConnection
+      tags: [archer-connections]
+      summary: Update an Archer connection
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArcherConnectionUpdate"
+      responses:
+        "200":
+          description: Updated connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArcherConnection"
+    delete:
+      operationId: deleteArcherConnection
+      tags: [archer-connections]
+      summary: Delete an Archer connection
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /archer-connections/{id}/test:
+    post:
+      operationId: testArcherConnection
+      tags: [archer-connections]
+      summary: Test an Archer connection
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectionTestResult"
+
+  # ── Deployments ─────────────────────────────────────────────────────────────
+  /deployments:
+    get:
+      operationId: listDeployments
+      tags: [deployments]
+      summary: List all deployments for the authenticated user
+      responses:
+        "200":
+          description: List of deployments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Deployment"
+    post:
+      operationId: startDeployment
+      tags: [deployments]
+      summary: Start a deployment (simulated if no Archer connection)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeploymentInput"
+      responses:
+        "201":
+          description: Started deployment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deployment"
+
+  /deployments/{id}:
+    get:
+      operationId: getDeployment
+      tags: [deployments]
+      summary: Get a deployment by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deployment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deployment"
+
+  # ── Dashboard ───────────────────────────────────────────────────────────────
+  /dashboard/stats:
+    get:
+      operationId: getDashboardStats
+      tags: [dashboard]
+      summary: Get dashboard statistics and recent activity
+      responses:
+        "200":
+          description: Dashboard stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardStats"
+
+  # ── Admin ───────────────────────────────────────────────────────────────────
+  /admin/users:
+    get:
+      operationId: listAdminUsers
+      tags: [admin]
+      summary: List all users (admin only)
+      responses:
+        "200":
+          description: Users with project and deployment counts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminUser"
+
+  /admin/analytics:
+    get:
+      operationId: getAdminAnalytics
+      tags: [admin]
+      summary: Get platform-wide analytics (admin only)
+      responses:
+        "200":
+          description: Analytics data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAnalytics"
+
+  /admin/logs:
+    get:
+      operationId: listAdminLogs
+      tags: [admin]
+      summary: List API logs (admin only)
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: API logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiLogEntry"
+
 components:
   schemas:
     HealthStatus:
@@ -31,6 +476,434 @@ components:
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    # ── Project schemas ──────────────────────────────────────────────────────
+    Project:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: string
+        name:
+          type: string
+        description:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [draft, deployed, archived]
+        prompt:
+          type: ["string", "null"]
+        content:
+          oneOf:
+            - $ref: "#/components/schemas/ArcherImplementation"
+            - type: "null"
+        versionCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, userId, name, status, versionCount, createdAt, updatedAt]
+
+    ProjectInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+        prompt:
+          type: string
+        content:
+          $ref: "#/components/schemas/ArcherImplementation"
+      required: [name]
+
+    ProjectUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+        status:
+          type: string
+          enum: [draft, deployed, archived]
+        content:
+          $ref: "#/components/schemas/ArcherImplementation"
+
+    ProjectVersion:
+      type: object
+      properties:
+        id:
+          type: integer
+        projectId:
+          type: integer
+        versionNumber:
+          type: integer
+        content:
+          oneOf:
+            - $ref: "#/components/schemas/ArcherImplementation"
+            - type: "null"
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, projectId, versionNumber, createdAt]
+
+    ExportInput:
+      type: object
+      properties:
+        format:
+          type: string
+          enum: [word, pdf, markdown, json, archer-package]
+      required: [format]
+
+    ExportResult:
+      type: object
+      properties:
+        format:
+          type: string
+        filename:
+          type: string
+        content:
+          type: string
+        mimeType:
+          type: string
+      required: [format, filename, content, mimeType]
+
+    # ── Archer Implementation (AI-generated structure) ───────────────────────
+    ArcherImplementation:
+      type: object
+      properties:
+        businessOverview:
+          type: string
+        useCases:
+          type: array
+          items:
+            type: string
+        applicationStructure:
+          type: object
+          additionalProperties: true
+        modules:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        fields:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        valueLists:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        crossReferences:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        questionnaires:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        workflow:
+          type: object
+          additionalProperties: true
+        recordPermissions:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        notifications:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        reports:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        dashboards:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        sampleRecords:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        testCases:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    # ── AI schemas ───────────────────────────────────────────────────────────
+    GenerateInput:
+      type: object
+      properties:
+        prompt:
+          type: string
+          minLength: 1
+        projectId:
+          type: ["integer", "null"]
+      required: [prompt]
+
+    CopilotInput:
+      type: object
+      properties:
+        message:
+          type: string
+          minLength: 1
+        projectId:
+          type: ["integer", "null"]
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/CopilotMessage"
+      required: [message]
+
+    CopilotMessage:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+      required: [role, content]
+
+    # ── Archer Connection schemas ─────────────────────────────────────────────
+    ArcherConnection:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: string
+        name:
+          type: string
+        url:
+          type: string
+        username:
+          type: string
+        tenantName:
+          type: ["string", "null"]
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, userId, name, url, username, isActive, createdAt, updatedAt]
+
+    ArcherConnectionInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        url:
+          type: string
+          minLength: 1
+        username:
+          type: string
+          minLength: 1
+        credential:
+          type: string
+          minLength: 1
+        tenantName:
+          type: string
+      required: [name, url, username, credential]
+
+    ArcherConnectionUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        url:
+          type: string
+        username:
+          type: string
+        credential:
+          type: string
+        tenantName:
+          type: string
+        isActive:
+          type: boolean
+
+    ConnectionTestResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        details:
+          type: ["string", "null"]
+      required: [success, message]
+
+    # ── Deployment schemas ───────────────────────────────────────────────────
+    Deployment:
+      type: object
+      properties:
+        id:
+          type: integer
+        projectId:
+          type: integer
+        userId:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed, simulated]
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeploymentStep"
+        error:
+          type: ["string", "null"]
+        connectionId:
+          type: ["integer", "null"]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, projectId, userId, status, steps, createdAt, updatedAt]
+
+    DeploymentStep:
+      type: object
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        message:
+          type: ["string", "null"]
+      required: [name, status]
+
+    DeploymentInput:
+      type: object
+      properties:
+        projectId:
+          type: integer
+        connectionId:
+          type: ["integer", "null"]
+        simulate:
+          type: boolean
+      required: [projectId]
+
+    # ── Dashboard schemas ────────────────────────────────────────────────────
+    DashboardStats:
+      type: object
+      properties:
+        totalProjects:
+          type: integer
+        totalDeployments:
+          type: integer
+        savedHours:
+          type: number
+        draftProjects:
+          type: integer
+        deployedProjects:
+          type: integer
+        recentActivity:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActivityItem"
+      required:
+        [totalProjects, totalDeployments, savedHours, draftProjects, deployedProjects, recentActivity]
+
+    ActivityItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        type:
+          type: string
+        title:
+          type: string
+        description:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, type, title, createdAt]
+
+    # ── Admin schemas ────────────────────────────────────────────────────────
+    AdminUser:
+      type: object
+      properties:
+        userId:
+          type: string
+        email:
+          type: ["string", "null"]
+        projectCount:
+          type: integer
+        deploymentCount:
+          type: integer
+        lastActive:
+          type: ["string", "null"]
+      required: [userId, projectCount, deploymentCount]
+
+    AdminAnalytics:
+      type: object
+      properties:
+        totalUsers:
+          type: integer
+        totalProjects:
+          type: integer
+        totalDeployments:
+          type: integer
+        projectsPerDay:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        deploymentsPerDay:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+      required: [totalUsers, totalProjects, totalDeployments, projectsPerDay, deploymentsPerDay]
+
+    ApiLogEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: ["string", "null"]
+        endpoint:
+          type: string
+        method:
+          type: string
+        statusCode:
+          type: integer
+        durationMs:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, endpoint, method, statusCode, durationMs, createdAt]

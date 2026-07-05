@@ -1,0 +1,27 @@
+kind = "web"
+previewPath = "/"
+title = "ArcherPilot AI"
+version = "1.0.0"
+id = "artifacts/archer-pilot"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24403
+
+[services.development]
+run = "pnpm --filter @workspace/archer-pilot run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/archer-pilot", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/archer-pilot/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24403"
+BASE_PATH = "/"
