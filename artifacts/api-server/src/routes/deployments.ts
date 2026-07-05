@@ -1,15 +1,20 @@
 import { Router } from "express";
 import { eq, and, desc } from "drizzle-orm";
-import { db, deployments, projects, archerConnections } from "@workspace/db";
+import { db, deployments, projects } from "@workspace/db";
 import { StartDeploymentBody } from "@workspace/api-zod";
 import { requireAuth, type AuthenticatedRequest } from "../middlewares/auth";
 import { parseId } from "../lib/parseId";
-import { deployToArcher } from "../lib/archerClient";
+
+/**
+ * SAFETY POLICY: All deployments run in simulation mode only.
+ * No API calls are ever made to a live Archer instance from this service.
+ * The archerClient exists for reference but is never invoked here.
+ */
 
 const router = Router();
 
 const DEPLOYMENT_STEPS = [
-  "Login",
+  "Validating Project",
   "Creating Application",
   "Creating Modules",
   "Creating Value Lists",
@@ -18,10 +23,8 @@ const DEPLOYMENT_STEPS = [
   "Creating Workflow",
   "Creating Record Permissions",
   "Creating Notifications",
-  "Finalizing Deployment",
+  "Finalizing Plan",
 ];
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 type StepStatus = "pending" | "running" | "completed" | "warning" | "failed";
 
@@ -38,7 +41,7 @@ async function persistSteps(deploymentId: number, steps: StepRow[]) {
     .where(eq(deployments.id, deploymentId));
 }
 
-// ── Simulated deployment (no Archer connection) ───────────────────────────────
+// ── Simulation (the only deployment mode) ────────────────────────────────────
 
 async function runSimulatedDeployment(deploymentId: number, projectId: number) {
   const steps: StepRow[] = DEPLOYMENT_STEPS.map((name) => ({
@@ -55,7 +58,7 @@ async function runSimulatedDeployment(deploymentId: number, projectId: number) {
 
     for (let i = 0; i < DEPLOYMENT_STEPS.length; i++) {
       await new Promise((r) => setTimeout(r, 900 + Math.random() * 600));
-      steps[i] = { ...steps[i], status: "completed", message: "Simulated" };
+      steps[i] = { ...steps[i], status: "completed", message: "Simulated — no changes made to Archer" };
       await persistSteps(deploymentId, steps);
     }
 
@@ -73,94 +76,6 @@ async function runSimulatedDeployment(deploymentId: number, projectId: number) {
     await db
       .update(deployments)
       .set({ status: "failed", error: errMsg, updatedAt: new Date() })
-      .where(eq(deployments.id, deploymentId));
-  }
-}
-
-// ── Real Archer deployment ────────────────────────────────────────────────────
-
-async function runRealDeployment(
-  deploymentId: number,
-  projectId: number,
-  connection: { url: string; username: string; credential: string; tenantName: string | null },
-  content: any
-) {
-  const steps: StepRow[] = DEPLOYMENT_STEPS.map((name) => ({
-    name,
-    status: "pending",
-    message: null,
-  }));
-
-  // Persist initial running state
-  await db
-    .update(deployments)
-    .set({ status: "running", steps, updatedAt: new Date() })
-    .where(eq(deployments.id, deploymentId));
-
-  // Step callback: update the matching step in the DB as we go
-  const onStep = async (stepName: string, message: string, status?: "ok" | "warn") => {
-    const idx = steps.findIndex((s) => s.name === stepName);
-    if (idx !== -1) {
-      // Mark previous step complete if we're moving forward
-      const prevRunning = steps.findIndex((s) => s.status === "running");
-      if (prevRunning !== -1 && prevRunning !== idx) {
-        steps[prevRunning].status = "completed";
-      }
-      steps[idx] = {
-        name: stepName,
-        status: status === "warn" ? "warning" : status === "ok" ? "completed" : "running",
-        message,
-      };
-      await persistSteps(deploymentId, steps);
-    }
-  };
-
-  try {
-    const result = await deployToArcher(
-      connection.url,
-      connection.username,
-      connection.credential,
-      connection.tenantName ?? "Default",
-      content,
-      onStep
-    );
-
-    // Mark any remaining pending steps as skipped
-    for (const step of steps) {
-      if (step.status === "pending") step.status = "completed", step.message = "Skipped";
-    }
-
-    const warnings = result.warnings.length > 0
-      ? `Warnings: ${result.warnings.join(" | ")}`
-      : null;
-
-    await db
-      .update(deployments)
-      .set({
-        status: "completed",
-        steps,
-        error: warnings,
-        updatedAt: new Date(),
-      })
-      .where(eq(deployments.id, deploymentId));
-
-    await db
-      .update(projects)
-      .set({ status: "deployed", updatedAt: new Date() })
-      .where(eq(projects.id, projectId));
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-
-    // Mark the currently-running step as failed
-    const runningIdx = steps.findIndex((s) => s.status === "running");
-    if (runningIdx !== -1) {
-      steps[runningIdx].status = "failed";
-      steps[runningIdx].message = errMsg;
-    }
-
-    await db
-      .update(deployments)
-      .set({ status: "failed", steps, error: errMsg, updatedAt: new Date() })
       .where(eq(deployments.id, deploymentId));
   }
 }
@@ -220,32 +135,8 @@ router.post("/deployments", requireAuth, async (req, res) => {
       })
       .returning();
 
-    // Determine whether to run real or simulated deployment
-    const wantsReal = !!parsed.data.connectionId && parsed.data.simulate !== true;
-
-    if (wantsReal) {
-      // Fetch connection (including credential — never sent to the client)
-      const [conn] = await db
-        .select()
-        .from(archerConnections)
-        .where(
-          and(
-            eq(archerConnections.id, parsed.data.connectionId!),
-            eq(archerConnections.userId, r.userId)
-          )
-        );
-
-      if (!conn) {
-        res.status(404).json({ error: "Archer connection not found" });
-        return;
-      }
-
-      runRealDeployment(deployment.id, parsed.data.projectId, conn, project.content).catch(
-        console.error
-      );
-    } else {
-      runSimulatedDeployment(deployment.id, parsed.data.projectId).catch(console.error);
-    }
+    // Always simulate — never touch a live Archer instance
+    runSimulatedDeployment(deployment.id, parsed.data.projectId).catch(console.error);
 
     res.status(201).json(deployment);
   } catch (err) {

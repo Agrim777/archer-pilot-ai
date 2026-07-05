@@ -393,11 +393,11 @@ export default function ProjectDetailPage() {
                 />
 
                 {/* Group by module */}
-                {modules.map((mod: any) => {
+                {modules.map((mod: any, modIdx: number) => {
                   const modFields = fields.filter((f: any) => f.module === mod.name);
                   if (!modFields.length) return null;
                   return (
-                    <div key={mod.name} className="mb-6">
+                    <div key={`mod-group-${modIdx}`} className="mb-6">
                       <div className="flex items-center gap-2 mb-2">
                         <Database className="h-3.5 w-3.5 text-muted-foreground" />
                         <span className="text-sm font-semibold">{mod.name}</span>

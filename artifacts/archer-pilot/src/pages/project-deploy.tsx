@@ -91,7 +91,7 @@ export default function ProjectDeployPage() {
             
             <div className="text-center space-y-2 mb-10">
               <h2 className="text-3xl font-bold tracking-tight">Deploy: {project?.name || "Loading..."}</h2>
-              <p className="text-muted-foreground">Push this architecture directly to a target Archer instance.</p>
+              <p className="text-muted-foreground">Preview what will be created in Archer — no changes are made to your instance.</p>
             </div>
 
             {(!deploymentId || (!isDeploying && !isComplete && !hasError)) ? (
@@ -119,23 +119,20 @@ export default function ProjectDeployPage() {
                       )}
                     </div>
 
-                    <div className="pt-4 flex gap-4">
+                    <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3 flex items-start gap-3">
+                      <AlertCircle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+                      <p className="text-sm text-amber-300">
+                        <span className="font-semibold">Simulation only.</span> This preview shows every object that <em>would</em> be created in Archer — no changes are made to your instance.
+                      </p>
+                    </div>
+                    <div className="pt-2">
                       <Button 
                         size="lg" 
-                        className="flex-1 bg-primary hover:bg-primary/90 text-white h-14 text-lg shadow-[0_0_20px_rgba(79,70,229,0.3)]"
-                        onClick={() => handleDeploy(false)}
-                        disabled={!selectedConnection || startDeployment.isPending}
-                      >
-                        <Play className="h-5 w-5 mr-2" fill="currentColor" /> Deploy Now
-                      </Button>
-                      <Button 
-                        size="lg" 
-                        variant="outline" 
-                        className="flex-1 h-14 text-lg"
+                        className="w-full bg-primary hover:bg-primary/90 text-white h-14 text-lg shadow-[0_0_20px_rgba(79,70,229,0.3)]"
                         onClick={() => handleDeploy(true)}
                         disabled={startDeployment.isPending}
                       >
-                        Run Simulation (Dry Run)
+                        <Play className="h-5 w-5 mr-2" fill="currentColor" /> Preview Deployment Plan
                       </Button>
                     </div>
                   </CardContent>
