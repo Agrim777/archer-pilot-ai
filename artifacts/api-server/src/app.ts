@@ -1,6 +1,8 @@
 import express from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
 import { clerkMiddleware } from "@clerk/express";
 import { publishableKeyFromHost } from "@clerk/shared/keys";
 import {
@@ -18,19 +20,22 @@ app.use(pinoHttp({ logger }));
 // Clerk proxy must be mounted before body parsers (streams raw bytes)
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 
-// Restrict CORS to trusted Replit origins only — never reflect arbitrary origins
-// with credentials enabled, as that would allow cross-origin authenticated reads.
-const ALLOWED_ORIGIN_RE = /^https?:\/\/(?:localhost(?::\d+)?|(?:[\w-]+\.)?replit\.(?:app|dev|com)(?::\d+)?)$/;
+// CORS — allow same-origin, server-to-server (no origin), and known hosting domains.
+// Never use origin:true with credentials — that reflects ANY origin and enables CSRF.
+const ALLOWED_ORIGIN_RE =
+  /^https?:\/\/(?:localhost(?::\d+)?|(?:[\w-]+\.)?(?:replit\.(?:app|dev|com)|railway\.app|up\.railway\.app))(?::\d+)?$/;
+
+// Also allow any explicit CORS_ORIGIN env var (set this to your custom domain on Railway).
+const EXTRA_ORIGIN = process.env.CORS_ORIGIN;
+
 app.use(
   cors({
     credentials: true,
     origin: (origin, callback) => {
-      // Allow server-to-server (no origin) and same-origin requests
-      if (!origin || ALLOWED_ORIGIN_RE.test(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("CORS: origin not allowed"));
-      }
+      if (!origin) return callback(null, true); // server-to-server / same-origin
+      if (ALLOWED_ORIGIN_RE.test(origin)) return callback(null, true);
+      if (EXTRA_ORIGIN && origin === EXTRA_ORIGIN) return callback(null, true);
+      callback(new Error(`CORS: origin not allowed: ${origin}`));
     },
   }),
 );
@@ -49,5 +54,18 @@ app.use(
 );
 
 app.use("/api", router);
+
+// In production, serve the built React frontend as static files.
+// The frontend is built to artifacts/archer-pilot/dist/public by `pnpm run build`.
+if (process.env.NODE_ENV === "production") {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  // Relative to dist/index.mjs → ../../archer-pilot/dist/public
+  const frontendDist = join(__dirname, "..", "..", "archer-pilot", "dist", "public");
+  app.use(express.static(frontendDist));
+  // SPA fallback — all non-API routes serve index.html
+  app.get("*", (_req, res) => {
+    res.sendFile(join(frontendDist, "index.html"));
+  });
+}
 
 export default app;
