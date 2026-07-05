@@ -4,7 +4,7 @@ import { useGetProject, useGetDeployment, useStartDeployment, getGetDeploymentQu
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Play, CheckCircle2, Circle, Loader2, AlertCircle, Server } from "lucide-react";
+import { ArrowLeft, Play, CheckCircle2, Circle, Loader2, AlertCircle, Server, AlertTriangle } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
@@ -182,22 +182,27 @@ export default function ProjectDeployPage() {
                         const isStepFailed = step.status === 'failed';
                         const isStepPending = step.status === 'pending';
 
+                        const isStepWarning = step.status === 'warning';
+
                         return (
                           <div key={index} className={`flex items-start gap-4 p-4 rounded-lg border ${
                             isStepRunning ? 'bg-primary/5 border-primary/30 shadow-[0_0_15px_rgba(79,70,229,0.1)]' : 
                             isStepFailed ? 'bg-red-500/5 border-red-500/30' :
+                            isStepWarning ? 'bg-amber-500/5 border-amber-500/30' :
                             'bg-background border-border/50'
                           } transition-all duration-300`}>
                             <div className="mt-0.5 shrink-0">
                               {isStepComplete && <CheckCircle2 className="h-5 w-5 text-green-500" />}
                               {isStepRunning && <Loader2 className="h-5 w-5 text-primary animate-spin" />}
                               {isStepFailed && <AlertCircle className="h-5 w-5 text-red-500" />}
+                              {isStepWarning && <AlertTriangle className="h-5 w-5 text-amber-400" />}
                               {isStepPending && <Circle className="h-5 w-5 text-muted-foreground" />}
                             </div>
                             <div className="flex-1">
                               <h4 className={`font-medium ${
                                 isStepRunning ? 'text-primary' : 
                                 isStepFailed ? 'text-red-500' : 
+                                isStepWarning ? 'text-amber-400' :
                                 isStepPending ? 'text-muted-foreground' : 'text-foreground'
                               }`}>
                                 {step.name}

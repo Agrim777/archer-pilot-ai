@@ -415,10 +415,10 @@ export default function ProjectDetailPage() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-border/30">
-                            {modFields.map((field: any) => {
+                            {modFields.map((field: any, modFieldIdx: number) => {
                               const globalIdx = fields.findIndex((f: any) => f === field);
                               return (
-                                <tr key={globalIdx} className="hover:bg-muted/20 transition-colors">
+                                <tr key={`${mod.name}-${modFieldIdx}`} className="hover:bg-muted/20 transition-colors">
                                   <td className="px-4 py-2.5 font-medium">
                                     <InlineEdit value={field.name} onChange={v => {
                                       const next = [...fields];
@@ -535,9 +535,12 @@ export default function ProjectDetailPage() {
                 <div className="space-y-3">
                   {valueLists.map((vl: any, i: number) => (
                     <Card key={i} className="bg-card border-border/60">
-                      <button
-                        className="w-full p-4 flex items-center justify-between hover:bg-muted/20 transition-colors rounded-t-lg"
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        className="w-full p-4 flex items-center justify-between hover:bg-muted/20 transition-colors rounded-t-lg cursor-pointer"
                         onClick={() => setExpandedValueList(expandedValueList === i ? null : i)}
+                        onKeyDown={e => e.key === "Enter" && setExpandedValueList(expandedValueList === i ? null : i)}
                       >
                         <div className="flex items-center gap-3">
                           {expandedValueList === i ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
@@ -548,7 +551,7 @@ export default function ProjectDetailPage() {
                           className="text-muted-foreground hover:text-red-400 p-1">
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
-                      </button>
+                      </div>
                       {expandedValueList === i && (
                         <CardContent className="pt-0 pb-4 px-4 border-t border-border/30">
                           <div className="pl-7 space-y-3 pt-3">

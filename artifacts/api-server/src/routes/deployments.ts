@@ -1,72 +1,74 @@
 import { Router } from "express";
 import { eq, and, desc } from "drizzle-orm";
-import { db, deployments, projects } from "@workspace/db";
+import { db, deployments, projects, archerConnections } from "@workspace/db";
 import { StartDeploymentBody } from "@workspace/api-zod";
 import { requireAuth, type AuthenticatedRequest } from "../middlewares/auth";
 import { parseId } from "../lib/parseId";
+import { deployToArcher } from "../lib/archerClient";
 
 const router = Router();
 
 const DEPLOYMENT_STEPS = [
+  "Login",
   "Creating Application",
   "Creating Modules",
-  "Creating Fields",
   "Creating Value Lists",
+  "Creating Fields",
   "Creating Cross References",
   "Creating Workflow",
   "Creating Record Permissions",
   "Creating Notifications",
-  "Generating Reports",
   "Finalizing Deployment",
 ];
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+type StepStatus = "pending" | "running" | "completed" | "warning" | "failed";
+
+interface StepRow {
+  name: string;
+  status: StepStatus;
+  message: string | null;
+}
+
+async function persistSteps(deploymentId: number, steps: StepRow[]) {
+  await db
+    .update(deployments)
+    .set({ steps, updatedAt: new Date() })
+    .where(eq(deployments.id, deploymentId));
+}
+
+// ── Simulated deployment (no Archer connection) ───────────────────────────────
+
 async function runSimulatedDeployment(deploymentId: number, projectId: number) {
-  const initialSteps = DEPLOYMENT_STEPS.map((name) => ({
+  const steps: StepRow[] = DEPLOYMENT_STEPS.map((name) => ({
     name,
     status: "pending",
     message: null,
   }));
 
   try {
-    // Mark running
     await db
       .update(deployments)
-      .set({ status: "running", steps: initialSteps, updatedAt: new Date() })
+      .set({ status: "running", steps, updatedAt: new Date() })
       .where(eq(deployments.id, deploymentId));
 
     for (let i = 0; i < DEPLOYMENT_STEPS.length; i++) {
-      await new Promise((r) => setTimeout(r, 1200 + Math.random() * 800));
-
-      const updatedSteps = initialSteps.map((step, idx) => {
-        if (idx < i) return { ...step, status: "completed", message: "Done" };
-        if (idx === i) return { ...step, status: "running", message: "In progress..." };
-        return step;
-      });
-
-      await db
-        .update(deployments)
-        .set({ steps: updatedSteps, updatedAt: new Date() })
-        .where(eq(deployments.id, deploymentId));
+      await new Promise((r) => setTimeout(r, 900 + Math.random() * 600));
+      steps[i] = { ...steps[i], status: "completed", message: "Simulated" };
+      await persistSteps(deploymentId, steps);
     }
-
-    const completedSteps = DEPLOYMENT_STEPS.map((name) => ({
-      name,
-      status: "completed",
-      message: "Done",
-    }));
 
     await db
       .update(deployments)
-      .set({ status: "simulated", steps: completedSteps, updatedAt: new Date() })
+      .set({ status: "simulated", steps, updatedAt: new Date() })
       .where(eq(deployments.id, deploymentId));
 
-    // Only mark project as deployed after simulation succeeds
     await db
       .update(projects)
       .set({ status: "deployed", updatedAt: new Date() })
       .where(eq(projects.id, projectId));
   } catch (err) {
-    // Persist failure state so the client can display the error
     const errMsg = err instanceof Error ? err.message : String(err);
     await db
       .update(deployments)
@@ -74,6 +76,96 @@ async function runSimulatedDeployment(deploymentId: number, projectId: number) {
       .where(eq(deployments.id, deploymentId));
   }
 }
+
+// ── Real Archer deployment ────────────────────────────────────────────────────
+
+async function runRealDeployment(
+  deploymentId: number,
+  projectId: number,
+  connection: { url: string; username: string; credential: string; tenantName: string | null },
+  content: any
+) {
+  const steps: StepRow[] = DEPLOYMENT_STEPS.map((name) => ({
+    name,
+    status: "pending",
+    message: null,
+  }));
+
+  // Persist initial running state
+  await db
+    .update(deployments)
+    .set({ status: "running", steps, updatedAt: new Date() })
+    .where(eq(deployments.id, deploymentId));
+
+  // Step callback: update the matching step in the DB as we go
+  const onStep = async (stepName: string, message: string, status?: "ok" | "warn") => {
+    const idx = steps.findIndex((s) => s.name === stepName);
+    if (idx !== -1) {
+      // Mark previous step complete if we're moving forward
+      const prevRunning = steps.findIndex((s) => s.status === "running");
+      if (prevRunning !== -1 && prevRunning !== idx) {
+        steps[prevRunning].status = "completed";
+      }
+      steps[idx] = {
+        name: stepName,
+        status: status === "warn" ? "warning" : status === "ok" ? "completed" : "running",
+        message,
+      };
+      await persistSteps(deploymentId, steps);
+    }
+  };
+
+  try {
+    const result = await deployToArcher(
+      connection.url,
+      connection.username,
+      connection.credential,
+      connection.tenantName ?? "Default",
+      content,
+      onStep
+    );
+
+    // Mark any remaining pending steps as skipped
+    for (const step of steps) {
+      if (step.status === "pending") step.status = "completed", step.message = "Skipped";
+    }
+
+    const warnings = result.warnings.length > 0
+      ? `Warnings: ${result.warnings.join(" | ")}`
+      : null;
+
+    await db
+      .update(deployments)
+      .set({
+        status: "completed",
+        steps,
+        error: warnings,
+        updatedAt: new Date(),
+      })
+      .where(eq(deployments.id, deploymentId));
+
+    await db
+      .update(projects)
+      .set({ status: "deployed", updatedAt: new Date() })
+      .where(eq(projects.id, projectId));
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+
+    // Mark the currently-running step as failed
+    const runningIdx = steps.findIndex((s) => s.status === "running");
+    if (runningIdx !== -1) {
+      steps[runningIdx].status = "failed";
+      steps[runningIdx].message = errMsg;
+    }
+
+    await db
+      .update(deployments)
+      .set({ status: "failed", steps, error: errMsg, updatedAt: new Date() })
+      .where(eq(deployments.id, deploymentId));
+  }
+}
+
+// ── Routes ────────────────────────────────────────────────────────────────────
 
 // GET /deployments
 router.get("/deployments", requireAuth, async (req, res) => {
@@ -84,7 +176,6 @@ router.get("/deployments", requireAuth, async (req, res) => {
       .from(deployments)
       .where(eq(deployments.userId, r.userId))
       .orderBy(desc(deployments.createdAt));
-
     res.json(rows);
   } catch (err) {
     req.log.error(err);
@@ -114,7 +205,7 @@ router.post("/deployments", requireAuth, async (req, res) => {
 
     const initialSteps = DEPLOYMENT_STEPS.map((name) => ({
       name,
-      status: "pending",
+      status: "pending" as StepStatus,
       message: null,
     }));
 
@@ -129,15 +220,30 @@ router.post("/deployments", requireAuth, async (req, res) => {
       })
       .returning();
 
-    // Run simulation when: no connection provided, OR simulate flag is explicitly true.
-    // A real Archer connection is required for live deployment; for now, all deployments
-    // run as simulation (real Archer REST API calls are a future step).
-    const shouldSimulate = !parsed.data.connectionId || parsed.data.simulate !== false;
-    if (shouldSimulate) {
-      runSimulatedDeployment(deployment.id, parsed.data.projectId).catch(console.error);
+    // Determine whether to run real or simulated deployment
+    const wantsReal = !!parsed.data.connectionId && parsed.data.simulate !== true;
+
+    if (wantsReal) {
+      // Fetch connection (including credential — never sent to the client)
+      const [conn] = await db
+        .select()
+        .from(archerConnections)
+        .where(
+          and(
+            eq(archerConnections.id, parsed.data.connectionId!),
+            eq(archerConnections.userId, r.userId)
+          )
+        );
+
+      if (!conn) {
+        res.status(404).json({ error: "Archer connection not found" });
+        return;
+      }
+
+      runRealDeployment(deployment.id, parsed.data.projectId, conn, project.content).catch(
+        console.error
+      );
     } else {
-      // Real deployment path: connectionId is present and simulate is explicitly false.
-      // Currently falls back to simulation until Archer REST API integration is complete.
       runSimulatedDeployment(deployment.id, parsed.data.projectId).catch(console.error);
     }
 
