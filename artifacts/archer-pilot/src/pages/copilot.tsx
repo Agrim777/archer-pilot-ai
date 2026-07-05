@@ -29,16 +29,10 @@ export default function CopilotPage() {
     const userMessage = input.trim();
     setInput("");
 
-    // Build history excluding the initial greeting
-    const history = messages.slice(1).map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
+    const history = messages.slice(1).map((m) => ({ role: m.role, content: m.content }));
 
     setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
     setIsStreaming(true);
-
-    // Add an empty assistant message that we'll stream into
     setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
     try {
@@ -69,7 +63,6 @@ export default function CopilotPage() {
           if (!line.startsWith("data: ")) continue;
           const data = line.slice(6).trim();
           if (!data) continue;
-
           try {
             const parsed = JSON.parse(data);
             if (parsed.done) break;

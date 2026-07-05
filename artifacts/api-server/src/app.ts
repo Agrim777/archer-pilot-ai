@@ -22,8 +22,10 @@ app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 
 // CORS — allow same-origin, server-to-server (no origin), and known hosting domains.
 // Never use origin:true with credentials — that reflects ANY origin and enables CSRF.
+// Match localhost and any subdomain depth under replit.* or railway.app.
+// Replit dev URLs use multiple subdomain levels e.g. <id>.sisko.replit.dev
 const ALLOWED_ORIGIN_RE =
-  /^https?:\/\/(?:localhost(?::\d+)?|(?:[\w-]+\.)?(?:replit\.(?:app|dev|com)|railway\.app|up\.railway\.app))(?::\d+)?$/;
+  /^https?:\/\/(?:localhost(?::\d+)?|(?:[\w.-]+\.)?(?:replit\.(?:app|dev|com)|railway\.app|up\.railway\.app))(?::\d+)?$/;
 
 // Also allow any explicit CORS_ORIGIN env var (set this to your custom domain on Railway).
 const EXTRA_ORIGIN = process.env.CORS_ORIGIN;
