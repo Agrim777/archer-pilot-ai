@@ -1,274 +1,444 @@
 /**
- * RSA Archer GRC Platform REST API client (v6.x)
+ * RSA Archer GRC Platform — RESTful API Client
  *
- * Archer REST API base path: <instanceUrl>/api/
- * Auth header after login: Authorization: Archer session-id="<token>"
+ * Built from official Archer documentation:
+ * https://help.archerirm.cloud/api_2025_04/content/api/restfulapi/
  *
- * Objects we create in order:
- *   1. Login → session token
- *   2. Application
- *   3. Levels (modules) per application
- *   4. Values Lists + Values (must exist before Values List fields)
- *   5. Field Definitions (per level, referencing value list IDs)
- *   6. Notifications
- *   7. Record Permissions (requires Archer Group IDs)
+ * ── KEY FACTS FROM OFFICIAL DOCS ────────────────────────────────────────────
+ * Base path (Archer 6.5+): /platformapi/core/  (NOT /api/core/)
+ * Auth header:             Authorization: Archer session-id="<token>"
+ * Login response:          { "SessionToken": "..." }   ← top-level, no wrapper
+ * Logout:                  POST /platformapi/core/security/logout  { "Value": "token" }
+ * GET-style reads:         POST with X-Http-Method-Override: GET
+ *
+ * ── OFFICIAL FIELD TYPE IDs ─────────────────────────────────────────────────
+ *  1  Text              9  Cross-Reference      21 First Published
+ *  2  Numeric          11  Attachment           22 Last Updated Field
+ *  3  Date             12  Image                23 Related Records
+ *  4  Values List      14  CAST Score Card      24 Sub-Form
+ *  6  TrackingID       16  Matrix               25 History Log
+ *  7  External Links   19  IP Address           27 Multi-Ref Display
+ *  8  Users/Groups     20  Record Status        30 Voting
+ *
+ * ── WHAT THE REST API SUPPORTS ──────────────────────────────────────────────
+ * ✅ Login / Logout
+ * ✅ Read applications, levels, field definitions (GET via POST override)
+ * ✅ Create / Update / Delete CONTENT RECORDS (data rows in existing apps)
+ * ✅ Perform workflow actions on existing records
+ * ⚠️  Creating app structure (new apps, levels, field defs, value lists) is
+ *    metadata admin work — Archer exposes these via the Application Builder UI
+ *    or via its Package Import mechanism, not through the content REST API.
+ *    We attempt them here and fall back gracefully when not supported.
  */
 
-export type StepCallback = (stepName: string, message: string, status?: "ok" | "warn") => Promise<void>;
+export type StepCallback = (
+  stepName: string,
+  message: string,
+  status?: "ok" | "warn"
+) => Promise<void>;
 
-/** Map AI-generated type strings → Archer FieldType integers */
+// ── Field type map (official Archer 2025 docs) ────────────────────────────
 const FIELD_TYPE_MAP: Record<string, number> = {
   "Text": 1,
   "Numeric": 2,
   "Number": 2,
   "Date": 3,
   "Values List": 4,
-  "Related Records": 8,
-  "Cross-Reference": 8,
-  "User/Groups List": 9,
+  "TrackingID": 6,
+  "External Links": 7,
+  "Users/Groups List": 8,
+  "Cross-Reference": 9,
   "Attachment": 11,
   "Image": 12,
+  "Matrix": 16,
   "IP Address": 19,
-  "URL": 22,
-  "Calculated": 23,
-  "Checkbox": 4,    // Archer has no native checkbox — use Values List: Yes / No
-  "Matrix": 37,
+  "Record Status": 20,
+  "Related Records": 23,
+  "Sub-Form": 24,
+  // AI-generated type names mapped to closest Archer type
+  "Checkbox": 4,       // use Values List: Yes / No
+  "URL": 7,            // closest is External Links
+  "Calculated": 23,    // map to Related Records as proxy
+  "User": 8,
 };
 
-function archerType(typeStr: string): number {
-  return FIELD_TYPE_MAP[typeStr] ?? 1; // default to Text
+function archerFieldType(typeStr: string): number {
+  return FIELD_TYPE_MAP[typeStr] ?? 1; // default Text
 }
 
-function authHeaders(token: string) {
-  return {
+// ── HTTP helpers ──────────────────────────────────────────────────────────
+
+function authHeader(token: string) {
+  return `Archer session-id="${token}"`;
+}
+
+const COMMON_ACCEPT = "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+
+async function archerRequest(
+  baseUrl: string,
+  path: string,
+  method: "POST" | "DELETE",
+  body?: unknown,
+  token?: string,
+  overrideMethod?: "GET"
+): Promise<any> {
+  const headers: Record<string, string> = {
+    "Accept": COMMON_ACCEPT,
     "Content-Type": "application/json",
-    "Accept": "application/json",
-    "Authorization": `Archer session-id="${token}"`,
   };
-}
+  if (token) headers["Authorization"] = authHeader(token);
+  if (overrideMethod) headers["X-Http-Method-Override"] = overrideMethod;
 
-async function archerPost(baseUrl: string, path: string, body: unknown, token?: string): Promise<any> {
-  const headers: Record<string, string> = { "Content-Type": "application/json", "Accept": "application/json" };
-  if (token) headers["Authorization"] = `Archer session-id="${token}"`;
-
-  const res = await fetch(`${baseUrl}${path}`, {
-    method: "POST",
+  const url = `${baseUrl}/platformapi/core/${path}`;
+  const res = await fetch(url, {
+    method,
     headers,
-    body: JSON.stringify(body),
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
   const text = await res.text();
-  let data: any;
-  try { data = JSON.parse(text); } catch { throw new Error(`Archer returned non-JSON (HTTP ${res.status}): ${text.slice(0, 200)}`); }
+  let data: any = null;
+  try { data = JSON.parse(text); } catch { /* some endpoints return null or plain text */ }
 
-  if (!res.ok || data?.IsSuccessful === false) {
-    const msgs = data?.ValidationMessages?.map((m: any) => m.MessageKey || m.Message).join("; ") || text.slice(0, 300);
-    throw new Error(`Archer API error (HTTP ${res.status}): ${msgs}`);
+  // Archer returns IsSuccessful:false with validation messages on errors
+  if (data && data.IsSuccessful === false) {
+    const msgs = (data.ValidationMessages ?? [])
+      .map((m: any) => m.MessageKey || m.Message || JSON.stringify(m))
+      .join("; ");
+    throw new Error(`Archer: ${msgs || "Unknown error"} (HTTP ${res.status})`);
   }
+
+  if (!res.ok && res.status >= 400) {
+    throw new Error(`Archer HTTP ${res.status}: ${text.slice(0, 300)}`);
+  }
+
   return data;
 }
 
+/** GET-style read using POST + X-Http-Method-Override */
 async function archerGet(baseUrl: string, path: string, token: string): Promise<any> {
-  const res = await fetch(`${baseUrl}${path}`, {
-    headers: authHeaders(token),
-  });
-  const text = await res.text();
-  let data: any;
-  try { data = JSON.parse(text); } catch { throw new Error(`Archer returned non-JSON (HTTP ${res.status})`); }
-  return data;
+  return archerRequest(baseUrl, path, "POST", undefined, token, "GET");
 }
 
-// ─── Auth ────────────────────────────────────────────────────────────────────
+/** Write (create/update) using plain POST */
+async function archerPost(baseUrl: string, path: string, body: unknown, token: string): Promise<any> {
+  return archerRequest(baseUrl, path, "POST", body, token);
+}
 
-export async function archerLogin(baseUrl: string, username: string, password: string, instanceName: string): Promise<string> {
-  const data = await archerPost(baseUrl, "/api/core/security/login", {
+// ── Authentication ────────────────────────────────────────────────────────
+
+export async function archerLogin(
+  baseUrl: string,
+  username: string,
+  password: string,
+  instanceName: string
+): Promise<string> {
+  // Official request body per docs
+  const data = await archerRequest(baseUrl, "security/login", "POST", {
     InstanceName: instanceName || "Default",
     Username: username,
     UserDomain: "",
     Password: password,
   });
-  const token = data?.RequestedObject?.SessionToken;
-  if (!token) throw new Error("No session token returned from Archer login");
+
+  // Official response: { "SessionToken": "..." }  (top-level, no RequestedObject wrapper)
+  const token = data?.SessionToken ?? data?.RequestedObject?.SessionToken;
+  if (!token) {
+    throw new Error(
+      "Login succeeded but no session token returned. Check username, password and instance name."
+    );
+  }
   return token;
 }
 
 export async function archerLogout(baseUrl: string, token: string): Promise<void> {
+  // Official logout: POST with body { "Value": "<token>" }
   try {
-    await fetch(`${baseUrl}/api/core/security/logout`, {
-      method: "DELETE",
-      headers: authHeaders(token),
-    });
-  } catch { /* best-effort */ }
-}
-
-// ─── Application ─────────────────────────────────────────────────────────────
-
-export async function createApplication(baseUrl: string, token: string, name: string, type = 2): Promise<number> {
-  // type 2 = Standard Application; 1 = Questionnaire; 3 = Findings
-  const alias = name.replace(/[^a-zA-Z0-9]/g, "").slice(0, 30);
-  const data = await archerPost(baseUrl, "/api/core/system/application", {
-    Application: {
-      Name: name,
-      Alias: alias || "App",
-      Status: 1,
-      Type: type,
-      IsGlobal: false,
-    },
-  }, token);
-  const id = data?.RequestedObject?.Id;
-  if (!id) throw new Error("No application ID returned");
-  return id;
-}
-
-// ─── Levels (modules) ────────────────────────────────────────────────────────
-
-export async function createLevel(baseUrl: string, token: string, applicationId: number, name: string): Promise<number> {
-  const data = await archerPost(baseUrl, "/api/core/system/level", {
-    Level: {
-      Name: name,
-      ApplicationId: applicationId,
-    },
-  }, token);
-  const id = data?.RequestedObject?.Id;
-  if (!id) throw new Error(`No level ID returned for module "${name}"`);
-  return id;
-}
-
-// ─── Values Lists ─────────────────────────────────────────────────────────────
-
-export async function createValuesList(baseUrl: string, token: string, name: string): Promise<number> {
-  const data = await archerPost(baseUrl, "/api/core/system/valueslist", {
-    ValuesList: { Name: name },
-  }, token);
-  const id = data?.RequestedObject?.Id;
-  if (!id) throw new Error(`No values list ID returned for "${name}"`);
-  return id;
-}
-
-export async function addValuesListValue(
-  baseUrl: string,
-  token: string,
-  valuesListId: number,
-  valueName: string,
-  isDefault = false
-): Promise<number> {
-  const data = await archerPost(baseUrl, "/api/core/system/valueslistvalue", {
-    ValuesListValue: {
-      Name: valueName,
-      ValuesListId: valuesListId,
-      IsDefault: isDefault,
-      Enabled: true,
-    },
-  }, token);
-  return data?.RequestedObject?.Id ?? 0;
-}
-
-// ─── Fields ──────────────────────────────────────────────────────────────────
-
-export interface FieldSpec {
-  name: string;
-  type: string;
-  required: boolean;
-  description?: string;
-  valuesListId?: number;   // for Values List fields
-  relatedAppId?: number;   // for Cross-Reference fields
-}
-
-export async function createField(
-  baseUrl: string,
-  token: string,
-  levelId: number,
-  spec: FieldSpec
-): Promise<number> {
-  const archerFieldType = archerType(spec.type);
-
-  const fieldBody: any = {
-    Name: spec.name,
-    FieldType: archerFieldType,
-    LevelId: levelId,
-    IsRequired: spec.required,
-    IsReadOnly: false,
-    IsPrivate: false,
-  };
-
-  // Values List field: attach the list
-  if (archerFieldType === 4 && spec.valuesListId) {
-    fieldBody.RelatedValuesListId = spec.valuesListId;
-    fieldBody.AllowOtherValue = false;
+    await archerRequest(baseUrl, "security/logout", "POST", { Value: token }, token);
+  } catch {
+    // Best-effort — don't fail the overall deployment if logout errors
   }
-
-  // Cross-Reference: attach related application
-  if (archerFieldType === 8 && spec.relatedAppId) {
-    fieldBody.RelatedApplicationId = spec.relatedAppId;
-  }
-
-  const data = await archerPost(baseUrl, "/api/core/system/fielddefinition", {
-    FieldDefinition: fieldBody,
-  }, token);
-
-  return data?.RequestedObject?.Id ?? 0;
 }
 
-// ─── Notifications ────────────────────────────────────────────────────────────
+// ── Read existing applications (for reference / conflict check) ───────────
 
-export async function createNotification(
+export async function listApplications(
   baseUrl: string,
-  token: string,
-  applicationId: number,
-  name: string,
-  subject: string
-): Promise<number> {
-  // Basic notification — trigger and recipients must be set in UI for complex rules
-  const data = await archerPost(baseUrl, "/api/core/system/notification", {
-    Notification: {
-      Name: name,
-      Subject: subject,
-      ApplicationId: applicationId,
-      Status: 1,
-      Body: `Automated notification: ${name}`,
-    },
-  }, token);
-  return data?.RequestedObject?.Id ?? 0;
-}
-
-// ─── Groups (for record permissions) ─────────────────────────────────────────
-
-export async function getGroups(baseUrl: string, token: string): Promise<Array<{ id: number; name: string }>> {
+  token: string
+): Promise<Array<{ Id: number; Name: string; Guid: string }>> {
   try {
-    const data = await archerGet(baseUrl, "/api/core/system/group", token);
-    return (data?.RequestedObject ?? []).map((g: any) => ({ id: g.Id, name: g.Name }));
+    const data = await archerGet(baseUrl, "system/application", token);
+    return data?.RequestedObject ?? data ?? [];
   } catch {
     return [];
   }
 }
 
-export async function setRecordPermission(
+export async function getApplicationById(
+  baseUrl: string,
+  token: string,
+  appId: number
+): Promise<any> {
+  return archerGet(baseUrl, `system/application/${appId}`, token);
+}
+
+// ── Read existing levels / field definitions ──────────────────────────────
+
+export async function getLevelsByApplication(
+  baseUrl: string,
+  token: string,
+  applicationId: number
+): Promise<any[]> {
+  try {
+    const data = await archerGet(baseUrl, `system/level/module/${applicationId}`, token);
+    return data?.RequestedObject ?? data ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function getFieldsByApplication(
+  baseUrl: string,
+  token: string,
+  applicationId: number
+): Promise<any[]> {
+  try {
+    const data = await archerGet(
+      baseUrl,
+      `system/fielddefinition/application/${applicationId}`,
+      token
+    );
+    return data?.RequestedObject ?? data ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function getValuesList(
+  baseUrl: string,
+  token: string
+): Promise<any[]> {
+  try {
+    const data = await archerGet(baseUrl, "system/valueslistvalue", token);
+    return data?.RequestedObject ?? data ?? [];
+  } catch {
+    return [];
+  }
+}
+
+// ── Create content RECORDS within an existing application ─────────────────
+//    (This is what the Archer REST API primarily supports for writes)
+
+export interface FieldValue {
+  fieldId: number;
+  value: any;
+  type: number;
+}
+
+/**
+ * Create a content record in an existing Archer application.
+ * fieldValues maps fieldId → value formatted per field type.
+ */
+export async function createContentRecord(
   baseUrl: string,
   token: string,
   levelId: number,
-  groupId: number,
-  rights: { read: boolean; create: boolean; update: boolean; delete: boolean }
-): Promise<void> {
-  // Archer record permissions: 1=Read, 3=Read+Create, 7=Read+Create+Update, 15=Full
-  let permissionType = 0;
-  if (rights.read) permissionType |= 1;
-  if (rights.create) permissionType |= 2;
-  if (rights.update) permissionType |= 4;
-  if (rights.delete) permissionType |= 8;
+  fieldValues: FieldValue[]
+): Promise<number> {
+  // Build the content request per Archer REST API format
+  const FieldContents: Record<string, any> = {};
+  for (const fv of fieldValues) {
+    FieldContents[fv.fieldId] = buildFieldContent(fv);
+  }
 
-  await archerPost(baseUrl, "/api/core/system/accessrole", {
-    AccessRole: {
+  const data = await archerPost(baseUrl, "content", {
+    Content: {
       LevelId: levelId,
-      GroupId: groupId,
-      AccessRoleType: permissionType,
+      FieldContents,
     },
+  }, token);
+
+  return data?.RequestedObject?.Id ?? data?.Id ?? 0;
+}
+
+function buildFieldContent(fv: FieldValue): any {
+  switch (fv.type) {
+    case 1: // Text
+      return { Type: 1, Value: String(fv.value ?? "") };
+    case 2: // Numeric
+      return { Type: 2, Value: fv.value };
+    case 3: // Date
+      return { Type: 3, Value: fv.value };
+    case 4: // Values List
+      return {
+        Type: 4,
+        Value: Array.isArray(fv.value)
+          ? fv.value.map((id: number) => ({ ValuesListValueId: id }))
+          : [{ ValuesListValueId: fv.value }],
+      };
+    case 8: // Users/Groups List
+      return { Type: 8, Value: { UsersGroups: [{ Id: fv.value, IsGroup: false }] } };
+    case 9: // Cross-Reference
+      return { Type: 9, Value: [{ ContentId: fv.value }] };
+    default:
+      return { Type: fv.type, Value: fv.value };
+  }
+}
+
+// ── Workflow actions on existing records ──────────────────────────────────
+
+export async function getWorkflowActions(
+  baseUrl: string,
+  token: string,
+  contentId: number
+): Promise<any[]> {
+  const data = await archerGet(
+    baseUrl,
+    `workflow/records/${contentId}/actions`,
+    token
+  );
+  return data?.RequestedObject ?? data ?? [];
+}
+
+export async function performWorkflowAction(
+  baseUrl: string,
+  token: string,
+  contentId: number,
+  workflowNodeId: string,
+  completionCode: number
+): Promise<void> {
+  await archerPost(baseUrl, "system/WorkflowAction", {
+    ContentId: contentId,
+    CompletionCode: completionCode,
+    WorkflowNodeId: workflowNodeId,
   }, token);
 }
 
-// ─── Full deployment orchestrator ─────────────────────────────────────────────
+// ── Application structure creation (admin endpoints — may not be in all instances) ──
+
+/**
+ * Attempt to create a new Archer application.
+ * NOTE: The public Archer REST API documents GET operations for /system/application.
+ * Creation may require admin access or may not be available via REST in all versions.
+ * Errors are surfaced with context so the user knows what failed.
+ */
+async function tryCreateApplication(
+  baseUrl: string,
+  token: string,
+  name: string
+): Promise<number | null> {
+  try {
+    const alias = name.replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 50);
+    const data = await archerPost(baseUrl, "system/application", {
+      Application: {
+        Name: name,
+        Alias: alias,
+        Status: 1,        // 1 = Active
+        Type: 2,          // 2 = Standard Application
+        IsGlobal: false,
+      },
+    }, token);
+    return data?.RequestedObject?.Id ?? data?.Id ?? null;
+  } catch (err: any) {
+    throw new Error(
+      `Could not create application "${name}". ` +
+      `This may require Application Builder admin rights in Archer. ` +
+      `Original error: ${err.message}`
+    );
+  }
+}
+
+async function tryCreateLevel(
+  baseUrl: string,
+  token: string,
+  applicationId: number,
+  name: string
+): Promise<number | null> {
+  try {
+    const data = await archerPost(baseUrl, "system/level", {
+      Level: {
+        Name: name,
+        ApplicationId: applicationId,
+      },
+    }, token);
+    return data?.RequestedObject?.Id ?? data?.Id ?? null;
+  } catch (err: any) {
+    throw new Error(
+      `Could not create module/level "${name}": ${err.message}`
+    );
+  }
+}
+
+async function tryCreateValuesList(
+  baseUrl: string,
+  token: string,
+  name: string
+): Promise<number | null> {
+  try {
+    const data = await archerPost(baseUrl, "system/valueslist", {
+      ValuesList: { Name: name },
+    }, token);
+    return data?.RequestedObject?.Id ?? data?.Id ?? null;
+  } catch (err: any) {
+    throw new Error(`Could not create values list "${name}": ${err.message}`);
+  }
+}
+
+async function tryAddValuesListValue(
+  baseUrl: string,
+  token: string,
+  valuesListId: number,
+  valueName: string,
+  isDefault: boolean
+): Promise<number> {
+  try {
+    const data = await archerPost(baseUrl, "system/valueslistvalue", {
+      ValuesListValue: {
+        Name: valueName,
+        ValuesListId: valuesListId,
+        IsDefault: isDefault,
+        Enabled: true,
+      },
+    }, token);
+    return data?.RequestedObject?.Id ?? data?.Id ?? 0;
+  } catch {
+    return 0; // non-fatal
+  }
+}
+
+async function tryCreateField(
+  baseUrl: string,
+  token: string,
+  levelId: number,
+  field: { name: string; type: string; required: boolean; valuesListId?: number }
+): Promise<number | null> {
+  try {
+    const fType = archerFieldType(field.type);
+    const body: any = {
+      FieldDefinition: {
+        Name: field.name,
+        FieldType: fType,
+        LevelId: levelId,
+        IsRequired: field.required,
+        IsReadOnly: false,
+        IsPrivate: false,
+      },
+    };
+    if (fType === 4 && field.valuesListId) {
+      body.FieldDefinition.RelatedValuesListId = field.valuesListId;
+      body.FieldDefinition.AllowOtherValue = false;
+    }
+    const data = await archerPost(baseUrl, "system/fielddefinition", body, token);
+    return data?.RequestedObject?.Id ?? data?.Id ?? null;
+  } catch (err: any) {
+    throw new Error(`Could not create field "${field.name}": ${err.message}`);
+  }
+}
+
+// ── Main deployment orchestrator ──────────────────────────────────────────
 
 export interface DeploymentResult {
-  applicationId: number;
+  applicationId: number | null;
   levelIds: number[];
   valuesListIds: Record<string, number>;
   fieldIds: number[];
@@ -286,8 +456,8 @@ export async function deployToArcher(
   const warnings: string[] = [];
   let token = "";
 
-  // 1. LOGIN
-  await onStep("Login", "Authenticating with Archer instance...");
+  // ── STEP 1: Login ────────────────────────────────────────────────────────
+  await onStep("Login", `Connecting to ${baseUrl}…`);
   token = await archerLogin(baseUrl, username, password, instanceName);
   await onStep("Login", `Authenticated as ${username}`, "ok");
 
@@ -296,47 +466,64 @@ export async function deployToArcher(
     content.modules?.[0]?.name ||
     "ArcherPilot Application";
 
-  // 2. CREATE APPLICATION
+  // ── STEP 2: Create Application ───────────────────────────────────────────
+  let applicationId: number | null = null;
   await onStep("Creating Application", `Creating application: ${appName}`);
-  const applicationId = await createApplication(baseUrl, token, appName);
-  await onStep("Creating Application", `Application created (ID: ${applicationId})`, "ok");
+  try {
+    applicationId = await tryCreateApplication(baseUrl, token, appName);
+    await onStep("Creating Application", `Application created (ID: ${applicationId})`, "ok");
+  } catch (err: any) {
+    warnings.push(err.message);
+    await onStep("Creating Application", err.message, "warn");
+  }
 
-  // 3. CREATE MODULES (Levels)
-  await onStep("Creating Modules", `Creating ${content.modules?.length ?? 0} module(s)...`);
+  // ── STEP 3: Create Modules (Levels) ──────────────────────────────────────
   const levelIds: number[] = [];
   const levelIdByModule: Record<string, number> = {};
+  await onStep("Creating Modules", `Creating ${content.modules?.length ?? 0} module(s)…`);
 
-  for (const mod of content.modules ?? []) {
-    try {
-      const levelId = await createLevel(baseUrl, token, applicationId, mod.name);
-      levelIds.push(levelId);
-      levelIdByModule[mod.name] = levelId;
-    } catch (err: any) {
-      warnings.push(`Module "${mod.name}": ${err.message}`);
+  if (applicationId) {
+    for (const mod of content.modules ?? []) {
+      try {
+        const lid = await tryCreateLevel(baseUrl, token, applicationId, mod.name);
+        if (lid) {
+          levelIds.push(lid);
+          levelIdByModule[mod.name] = lid;
+        }
+      } catch (err: any) {
+        warnings.push(`Module "${mod.name}": ${err.message}`);
+      }
+    }
+    // Fallback default level if no modules defined
+    if (levelIds.length === 0) {
+      try {
+        const lid = await tryCreateLevel(baseUrl, token, applicationId, appName);
+        if (lid) {
+          levelIds.push(lid);
+          levelIdByModule["__default__"] = lid;
+        }
+      } catch (err: any) {
+        warnings.push(`Default level: ${err.message}`);
+      }
     }
   }
-  // Fallback — if no modules defined, create a default level
-  if (levelIds.length === 0) {
-    const levelId = await createLevel(baseUrl, token, applicationId, appName);
-    levelIds.push(levelId);
-    levelIdByModule["__default__"] = levelId;
-  }
-  await onStep("Creating Modules", `${levelIds.length} module(s) created`, "ok");
+  await onStep("Creating Modules", `${levelIds.length} module(s) created`, levelIds.length > 0 ? "ok" : "warn");
 
-  // 4. VALUE LISTS
-  await onStep("Creating Value Lists", `Creating ${content.valueLists?.length ?? 0} value list(s)...`);
+  // ── STEP 4: Value Lists ───────────────────────────────────────────────────
   const valuesListIds: Record<string, number> = {};
+  await onStep("Creating Value Lists", `Creating ${content.valueLists?.length ?? 0} value list(s)…`);
 
   for (const vl of content.valueLists ?? []) {
     try {
-      const listId = await createValuesList(baseUrl, token, vl.name);
-      valuesListIds[vl.name] = listId;
-      for (let i = 0; i < (vl.values ?? []).length; i++) {
-        await addValuesListValue(baseUrl, token, listId, vl.values[i], i === 0);
+      const lid = await tryCreateValuesList(baseUrl, token, vl.name);
+      if (lid) {
+        valuesListIds[vl.name] = lid;
+        for (let i = 0; i < (vl.values ?? []).length; i++) {
+          await tryAddValuesListValue(baseUrl, token, lid, vl.values[i], i === 0);
+        }
       }
-      // Checkbox fallback: create Yes/No list
     } catch (err: any) {
-      warnings.push(`Value list "${vl.name}": ${err.message}`);
+      warnings.push(`Values list "${vl.name}": ${err.message}`);
     }
   }
 
@@ -345,61 +532,64 @@ export async function deployToArcher(
   let yesNoListId = 0;
   if (hasCheckbox) {
     try {
-      yesNoListId = await createValuesList(baseUrl, token, "Yes / No");
-      valuesListIds["Yes / No"] = yesNoListId;
-      await addValuesListValue(baseUrl, token, yesNoListId, "Yes", false);
-      await addValuesListValue(baseUrl, token, yesNoListId, "No", true);
+      const lid = await tryCreateValuesList(baseUrl, token, "Yes / No");
+      if (lid) {
+        yesNoListId = lid;
+        valuesListIds["Yes / No"] = lid;
+        await tryAddValuesListValue(baseUrl, token, lid, "Yes", false);
+        await tryAddValuesListValue(baseUrl, token, lid, "No", true);
+      }
     } catch { /* non-fatal */ }
   }
+  await onStep(
+    "Creating Value Lists",
+    `${Object.keys(valuesListIds).length} value list(s) created`,
+    Object.keys(valuesListIds).length > 0 ? "ok" : "warn"
+  );
 
-  await onStep("Creating Value Lists", `${Object.keys(valuesListIds).length} value list(s) created`, "ok");
-
-  // 5. FIELDS
-  await onStep("Creating Fields", `Creating ${content.fields?.length ?? 0} field(s)...`);
+  // ── STEP 5: Fields ────────────────────────────────────────────────────────
   const fieldIds: number[] = [];
+  await onStep("Creating Fields", `Creating ${content.fields?.length ?? 0} field(s)…`);
 
   for (const field of content.fields ?? []) {
-    // Resolve which level this field belongs to
     const levelId =
-      (field.module && levelIdByModule[field.module]) ||
-      levelIds[0];
-
+      (field.module && levelIdByModule[field.module]) || levelIds[0];
     if (!levelId) {
-      warnings.push(`Field "${field.name}": no level found for module "${field.module}"`);
+      warnings.push(`Field "${field.name}" skipped — no level available`);
       continue;
     }
 
-    // For Values List fields, resolve the list ID
+    // Resolve values list for Values List / Checkbox fields
     let valuesListId: number | undefined;
-    if (field.type === "Values List" || field.type === "Checkbox") {
-      if (field.type === "Checkbox") {
-        valuesListId = yesNoListId || undefined;
+    if (field.type === "Checkbox") {
+      valuesListId = yesNoListId || undefined;
+    } else if (field.type === "Values List") {
+      // Try to match by name
+      const match = Object.entries(valuesListIds).find(([k]) =>
+        k.toLowerCase().includes(field.name.toLowerCase()) ||
+        field.name.toLowerCase().includes(k.toLowerCase())
+      );
+      if (match) {
+        valuesListId = match[1];
       } else {
-        // Try to match by field name or description
-        const match = Object.entries(valuesListIds).find(([k]) =>
-          k.toLowerCase().includes(field.name.toLowerCase()) ||
-          field.name.toLowerCase().includes(k.toLowerCase())
-        );
-        valuesListId = match?.[1];
-        if (!valuesListId) {
-          // Create a dedicated mini-list for this field
-          try {
-            const miniId = await createValuesList(baseUrl, token, `${field.name} Values`);
-            valuesListId = miniId;
-            valuesListIds[`${field.name} Values`] = miniId;
-            await addValuesListValue(baseUrl, token, miniId, "Option 1", true);
-            await addValuesListValue(baseUrl, token, miniId, "Option 2", false);
-          } catch { /* non-fatal */ }
-        }
+        // Create a dedicated mini-list
+        try {
+          const lid = await tryCreateValuesList(baseUrl, token, `${field.name} Values`);
+          if (lid) {
+            valuesListId = lid;
+            valuesListIds[`${field.name} Values`] = lid;
+            await tryAddValuesListValue(baseUrl, token, lid, "Option 1", true);
+            await tryAddValuesListValue(baseUrl, token, lid, "Option 2", false);
+          }
+        } catch { /* non-fatal */ }
       }
     }
 
     try {
-      const fid = await createField(baseUrl, token, levelId, {
+      const fid = await tryCreateField(baseUrl, token, levelId, {
         name: field.name,
         type: field.type,
         required: !!field.required,
-        description: field.description,
         valuesListId,
       });
       if (fid) fieldIds.push(fid);
@@ -407,87 +597,74 @@ export async function deployToArcher(
       warnings.push(`Field "${field.name}": ${err.message}`);
     }
   }
+  await onStep("Creating Fields", `${fieldIds.length} field(s) created`, fieldIds.length > 0 ? "ok" : "warn");
 
-  await onStep("Creating Fields", `${fieldIds.length} field(s) created`, "ok");
-
-  // 6. CROSS REFERENCES
-  await onStep("Creating Cross References", `Setting up ${content.crossReferences?.length ?? 0} cross-reference(s)...`);
-  // Cross-references reference other application IDs — skipping for now since we only have one app
-  if ((content.crossReferences?.length ?? 0) === 0) {
-    await onStep("Creating Cross References", "None defined — skipped", "ok");
-  } else {
-    warnings.push("Cross-references require target applications to exist first. Configure them manually in Archer after this deployment.");
-    await onStep("Creating Cross References", "Skipped (target apps must exist first — see warnings)", "warn");
-  }
-
-  // 7. WORKFLOW
-  await onStep("Creating Workflow", "Configuring workflow stages...");
-  if (!content.workflow?.stages?.length) {
-    await onStep("Creating Workflow", "No workflow defined — skipped", "ok");
-  } else {
-    // Archer workflow requires creating workflow nodes via the UI wizard or complex API sequences.
-    // For now we record the intent and advise the user.
-    const stageNames = content.workflow.stages.map((s: any) => s.name).join(" → ");
-    warnings.push(`Workflow stages (${stageNames}) must be configured in Archer's Workflow Manager UI. The stage plan is saved in your project.`);
-    await onStep("Creating Workflow", `${content.workflow.stages.length} stage(s) planned — configure in Workflow Manager`, "warn");
-  }
-
-  // 8. RECORD PERMISSIONS
-  await onStep("Creating Record Permissions", "Applying record permissions...");
-  const groups = await getGroups(baseUrl, token);
-
-  let permissionsApplied = 0;
-  for (const perm of content.recordPermissions ?? []) {
-    const group = groups.find(g =>
-      g.name.toLowerCase().includes(perm.group.toLowerCase()) ||
-      perm.group.toLowerCase().includes(g.name.toLowerCase())
+  // ── STEP 6: Cross References ──────────────────────────────────────────────
+  await onStep("Creating Cross References", "Cross-references require target apps to already exist in Archer");
+  if ((content.crossReferences ?? []).length > 0) {
+    warnings.push(
+      `${content.crossReferences.length} cross-reference(s) defined but not auto-created — ` +
+      `target applications must exist first. Configure them manually in Application Builder.`
     );
-    if (!group) {
-      warnings.push(`Permission group "${perm.group}" not found in Archer. Create the group and apply permissions manually.`);
-      continue;
-    }
-    for (const levelId of levelIds) {
-      try {
-        await setRecordPermission(baseUrl, token, levelId, group.id, {
-          read: !!perm.read,
-          create: !!perm.create,
-          update: !!perm.update,
-          delete: !!perm.delete,
-        });
-        permissionsApplied++;
-      } catch (err: any) {
-        warnings.push(`Permission for "${perm.group}": ${err.message}`);
-      }
-    }
+    await onStep("Creating Cross References", "Skipped — configure manually after all target apps exist", "warn");
+  } else {
+    await onStep("Creating Cross References", "None defined", "ok");
   }
-  await onStep("Creating Record Permissions", permissionsApplied > 0 ? `${permissionsApplied} permission(s) applied` : "Permissions require manual setup — see warnings", permissionsApplied > 0 ? "ok" : "warn");
 
-  // 9. NOTIFICATIONS
-  await onStep("Creating Notifications", `Creating ${content.notifications?.length ?? 0} notification(s)...`);
-  let notifCount = 0;
-  for (const notif of content.notifications ?? []) {
-    try {
-      await createNotification(baseUrl, token, applicationId, notif.name || "Notification", notif.subject || notif.name || "Notification");
-      notifCount++;
-    } catch (err: any) {
-      warnings.push(`Notification "${notif.name}": ${err.message}`);
-    }
+  // ── STEP 7: Workflow ──────────────────────────────────────────────────────
+  await onStep("Creating Workflow", "Applying workflow configuration…");
+  if (content.workflow?.stages?.length) {
+    const stageList = content.workflow.stages.map((s: any) => s.name).join(" → ");
+    warnings.push(
+      `Workflow (${stageList}) must be configured in Archer's Workflow Manager UI. ` +
+      `The REST API does not support programmatic workflow stage creation.`
+    );
+    await onStep(
+      "Creating Workflow",
+      `${content.workflow.stages.length} stage(s) planned — set up in Archer Workflow Manager`,
+      "warn"
+    );
+  } else {
+    await onStep("Creating Workflow", "No workflow stages defined", "ok");
   }
-  // Also handle workflow notifications
-  for (const notif of content.workflow?.notifications ?? []) {
-    try {
-      const name = typeof notif === "string" ? notif : notif.name || "Workflow Notification";
-      await createNotification(baseUrl, token, applicationId, name, name);
-      notifCount++;
-    } catch (err: any) {
-      warnings.push(`Workflow notification: ${err.message}`);
-    }
-  }
-  await onStep("Creating Notifications", notifCount > 0 ? `${notifCount} notification(s) created` : "None or skipped", "ok");
 
-  // 10. LOGOUT
+  // ── STEP 8: Record Permissions ────────────────────────────────────────────
+  await onStep("Creating Record Permissions", "Permissions require Archer group IDs — must be set manually");
+  if ((content.recordPermissions ?? []).length > 0) {
+    const groupList = content.recordPermissions.map((p: any) => p.group).join(", ");
+    warnings.push(
+      `Record permissions for groups (${groupList}) must be set manually in Application Builder → Access Roles.`
+    );
+    await onStep("Creating Record Permissions", "Configure in Application Builder → Access Roles", "warn");
+  } else {
+    await onStep("Creating Record Permissions", "None defined", "ok");
+  }
+
+  // ── STEP 9: Notifications ─────────────────────────────────────────────────
+  await onStep("Creating Notifications", "Notification rules are configured inside Archer Application Builder");
+  const allNotifs = [
+    ...(content.notifications ?? []),
+    ...(content.workflow?.notifications ?? []),
+  ];
+  if (allNotifs.length > 0) {
+    warnings.push(
+      `${allNotifs.length} notification(s) defined — configure in Application Builder → Notifications. ` +
+      `The REST API does not expose a notification creation endpoint.`
+    );
+    await onStep("Creating Notifications", `${allNotifs.length} notification(s) — add manually in Archer`, "warn");
+  } else {
+    await onStep("Creating Notifications", "None defined", "ok");
+  }
+
+  // ── STEP 10: Finalize ────────────────────────────────────────────────────
   await archerLogout(baseUrl, token);
-  await onStep("Finalizing Deployment", `Deployment complete. Application ID: ${applicationId}. Open Archer to review.`, "ok");
+  await onStep(
+    "Finalizing Deployment",
+    applicationId
+      ? `Done. Application ID: ${applicationId}. Open Archer Application Builder to verify.`
+      : `Deployment attempted. Check Archer Application Builder — some steps may need manual completion.`,
+    "ok"
+  );
 
   return { applicationId, levelIds, valuesListIds, fieldIds, warnings };
 }
