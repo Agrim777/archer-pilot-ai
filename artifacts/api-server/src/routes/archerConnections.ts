@@ -7,6 +7,7 @@ import {
 } from "@workspace/api-zod";
 import { requireAuth, type AuthenticatedRequest } from "../middlewares/auth";
 import { parseId } from "../lib/parseId";
+import { archerLogin, archerLogout, getArcherVersion } from "../lib/archerClient";
 
 const router = Router();
 
@@ -210,36 +211,73 @@ router.post("/archer-connections/:id/test", requireAuth, async (req, res) => {
       return;
     }
 
-    // Attempt real connection; fall back to simulated success
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      const response = await fetch(`${conn.url}/api/core/security/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          InstanceName: conn.tenantName ?? "Default",
-          Username: conn.username,
-          UserDomain: "",
-          Password: conn.credential,
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
+    // Attempt real connection using the proper /platformapi/core/ path.
+    // A 10 s deadline prevents stalled TCP connections from hanging the route.
+    const TIMEOUT_MS = 10_000;
 
-      if (response.ok) {
-        res.json({ success: true, message: "Connection successful", details: `HTTP ${response.status}` });
-      } else {
-        res.json({ success: false, message: "Connection failed", details: `HTTP ${response.status}` });
-      }
-    } catch {
-      // Archer URL not reachable — simulate
+    type TestResult =
+      | { kind: "ok"; version: string }
+      | { kind: "timeout" }
+      | { kind: "network_error"; message: string }
+      | { kind: "auth_error"; message: string };
+
+    const raceResult: TestResult = await Promise.race([
+      (async (): Promise<TestResult> => {
+        try {
+          const token = await archerLogin(
+            conn.url,
+            conn.username,
+            conn.credential,
+            conn.tenantName ?? "Default"
+          );
+          const version = await getArcherVersion(conn.url, token);
+          await archerLogout(conn.url, token);
+          return { kind: "ok", version };
+        } catch (err: any) {
+          const code = err?.cause?.code ?? err?.code ?? "";
+          const isNetwork = ["ECONNREFUSED", "ENOTFOUND", "ETIMEDOUT"].includes(code);
+          if (isNetwork) {
+            return {
+              kind: "network_error",
+              message: `Cannot reach ${conn.url} (${code}). Check the URL and network access.`,
+            };
+          }
+          return {
+            kind: "auth_error",
+            message: err.message ?? "Invalid credentials or instance name",
+          };
+        }
+      })(),
+      new Promise<{ kind: "timeout" }>((resolve) =>
+        setTimeout(() => resolve({ kind: "timeout" }), TIMEOUT_MS)
+      ),
+    ]);
+
+    if (raceResult.kind === "timeout") {
       res.json({
-        success: true,
-        message: "Connection simulated (Archer endpoint not reachable)",
-        details: "Archer REST API endpoint could not be reached. Deployment will run in simulation mode.",
+        success: false,
+        message: "Connection timed out",
+        details: `No response from ${conn.url} within ${TIMEOUT_MS / 1000}s. Check the URL and network access.`,
       });
+      return;
     }
+
+    if (raceResult.kind === "network_error") {
+      res.json({ success: false, message: "Archer endpoint not reachable", details: raceResult.message });
+      return;
+    }
+
+    if (raceResult.kind === "auth_error") {
+      res.json({ success: false, message: "Authentication failed", details: raceResult.message });
+      return;
+    }
+
+    res.json({
+      success: true,
+      message: "Connection successful",
+      details: `Logged in as ${conn.username}. Archer version: ${raceResult.version}`,
+      version: raceResult.version,
+    });
   } catch (err) {
     req.log.error(err);
     res.status(500).json({ error: "Failed to test connection" });

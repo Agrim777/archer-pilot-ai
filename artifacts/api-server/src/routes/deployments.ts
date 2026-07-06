@@ -17,6 +17,7 @@ const router = Router();
 
 const DEPLOYMENT_STEPS = [
   "Login",
+  "Version Check",
   "Creating Application",
   "Creating Modules",
   "Creating Value Lists",

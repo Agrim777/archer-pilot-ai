@@ -3,6 +3,7 @@
  *
  * Built from official Archer documentation:
  * https://help.archerirm.cloud/api_2025_04/content/api/restfulapi/
+ * https://help.archerirm.cloud/platform_2026_06/en-us/content/platform/toc_section_intros/setup_maint.htm
  *
  * ── KEY FACTS FROM OFFICIAL DOCS ────────────────────────────────────────────
  * Base path (Archer 6.5+): /platformapi/core/  (NOT /api/core/)
@@ -10,6 +11,14 @@
  * Login response:          { "SessionToken": "..." }   ← top-level, no wrapper
  * Logout:                  POST /platformapi/core/security/logout  { "Value": "token" }
  * GET-style reads:         POST with X-Http-Method-Override: GET
+ *
+ * ── PACKAGE AUTOMATION API ─────────────────────────────────────────────────
+ * NOTE: The Package API uses the OLD /api/core/ base path (not /platformapi/core/)
+ * Source: https://help.archerirm.cloud/platform_2025_04/en-us/content/api/restfulapi/segmentsresources/pkg_automation_api.htm
+ *
+ * POST /api/core/package/              → create a new package record (by app GUID)
+ * POST /api/core/package/generate/{id} → generate the package ZIP on the server
+ * POST /api/core/package/install       → install a package into this instance
  *
  * ── OFFICIAL FIELD TYPE IDs ─────────────────────────────────────────────────
  *  1  Text              9  Cross-Reference      21 First Published
@@ -22,13 +31,19 @@
  *
  * ── WHAT THE REST API SUPPORTS ──────────────────────────────────────────────
  * ✅ Login / Logout
+ * ✅ Get Archer version (GET /platformapi/core/system/applicationinfo/version)
  * ✅ Read applications, levels, field definitions (GET via POST override)
  * ✅ Create / Update / Delete CONTENT RECORDS (data rows in existing apps)
  * ✅ Perform workflow actions on existing records
- * ⚠️  Creating app structure (new apps, levels, field defs, value lists) is
- *    metadata admin work — Archer exposes these via the Application Builder UI
- *    or via its Package Import mechanism, not through the content REST API.
- *    We attempt them here and fall back gracefully when not supported.
+ * ✅ Package automation (create/generate/install packages via /api/core/package/)
+ * ⚠️  Creating app structure (new apps, levels, field defs, value lists) via
+ *    POST /platformapi/core/system/application|level|fielddefinition|valueslist —
+ *    attempted here; requires Application Builder admin rights. The official docs
+ *    only document GET on these endpoints; creation is via UI/Package Import.
+ *    We attempt them and fall back gracefully with actionable error messages.
+ * ❌ Workflow stage creation — no REST endpoint; use Archer Workflow Manager UI
+ * ❌ Record permissions — set in Application Builder → Access Roles
+ * ❌ Notification rules — set in Application Builder → Notifications
  */
 
 export type StepCallback = (
@@ -125,6 +140,46 @@ async function archerPost(baseUrl: string, path: string, body: unknown, token: s
   return archerRequest(baseUrl, path, "POST", body, token);
 }
 
+// ── Package API helper (uses OLD /api/core/ base path, NOT /platformapi/) ──
+//    Source: Archer 2025 Platform docs — Package Automation API
+
+async function archerPackageRequest(
+  baseUrl: string,
+  path: string,
+  body?: unknown,
+  token?: string
+): Promise<any> {
+  const headers: Record<string, string> = {
+    "Accept": COMMON_ACCEPT,
+    "Content-Type": "application/json",
+  };
+  if (token) headers["Authorization"] = authHeader(token);
+
+  const url = `${baseUrl}/api/core/${path}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+
+  const text = await res.text();
+  let data: any = null;
+  try { data = JSON.parse(text); } catch { /* some responses are empty */ }
+
+  if (data && data.IsSuccessful === false) {
+    const msgs = (data.ValidationMessages ?? [])
+      .map((m: any) => m.MessageKey || m.Message || JSON.stringify(m))
+      .join("; ");
+    throw new Error(`Archer Package API: ${msgs || "Unknown error"} (HTTP ${res.status})`);
+  }
+
+  if (!res.ok && res.status >= 400) {
+    throw new Error(`Archer Package API HTTP ${res.status}: ${text.slice(0, 300)}`);
+  }
+
+  return data;
+}
+
 // ── Authentication ────────────────────────────────────────────────────────
 
 export async function archerLogin(
@@ -158,6 +213,107 @@ export async function archerLogout(baseUrl: string, token: string): Promise<void
   } catch {
     // Best-effort — don't fail the overall deployment if logout errors
   }
+}
+
+// ── Version / connection health ───────────────────────────────────────────
+
+/**
+ * Returns the Archer instance version string.
+ * Uses the officially documented endpoint:
+ *   GET /platformapi/core/system/applicationinfo/version
+ * Source: Archer API Reference 2025 — Metadata Application
+ */
+export async function getArcherVersion(
+  baseUrl: string,
+  token: string
+): Promise<string> {
+  try {
+    const data = await archerGet(baseUrl, "system/applicationinfo/version", token);
+    // Response may be a plain string or { RequestedObject: "..." } or { Value: "..." }
+    if (typeof data === "string") return data;
+    return (
+      data?.RequestedObject ??
+      data?.Value ??
+      data?.Version ??
+      "unknown"
+    );
+  } catch {
+    return "unknown";
+  }
+}
+
+// ── Package automation (officially documented /api/core/package/ endpoints) ──
+//    Source: https://help.archerirm.cloud/platform_2025_04/en-us/content/api/restfulapi/segmentsresources/pkg_automation_api.htm
+
+export interface PackageObject {
+  Guid: string;
+  Type: "Application" | "SubForm" | "GlobalReport" | "Questionnaire";
+}
+
+/**
+ * Create a new package record in Archer from existing application GUIDs.
+ * Returns the new package ID.
+ */
+export async function createPackage(
+  baseUrl: string,
+  token: string,
+  name: string,
+  description: string,
+  packageObjects: PackageObject[]
+): Promise<number> {
+  const data = await archerPackageRequest(baseUrl, "package", {
+    Name: name,
+    Description: description,
+    PreparedBy: "ArcherPilot AI",
+    PackageObjects: packageObjects,
+  }, token);
+  return data?.RequestedObject?.Id ?? data?.Id ?? 0;
+}
+
+/**
+ * Generate (zip) a package by its ID.
+ * Must be called after createPackage; the package is then available for download.
+ */
+export async function generatePackage(
+  baseUrl: string,
+  token: string,
+  packageId: number
+): Promise<void> {
+  await archerPackageRequest(baseUrl, `package/generate/${packageId}`, undefined, token);
+}
+
+/**
+ * Install a package into the Archer instance.
+ * installOptions: array of { Guid, Name, Type, TranslationOption, InstallMethod, InstallOption }
+ * InstallMethod: 1=Create New, 2=Replace existing
+ * InstallOption: 1=Install, 2=Skip
+ */
+export async function installPackage(
+  baseUrl: string,
+  token: string,
+  packageId: number,
+  installOptions: Array<{
+    Guid: string;
+    Name: string;
+    Type: string;
+    TranslationOption?: number;
+    InstallMethod?: number;
+    InstallOption?: number;
+  }>
+): Promise<void> {
+  await archerPackageRequest(baseUrl, "package/install", {
+    PackageId: packageId,
+    InactivateUnusedFields: false,
+    PrefixInactivatedFields: null,
+    InstallOptions: installOptions.map((o) => ({
+      Guid: o.Guid,
+      Name: o.Name,
+      Type: o.Type,
+      TranslationOption: o.TranslationOption ?? 1,
+      InstallMethod: o.InstallMethod ?? 2,
+      InstallOption: o.InstallOption ?? 1,
+    })),
+  }, token);
 }
 
 // ── Read existing applications (for reference / conflict check) ───────────
@@ -466,7 +622,12 @@ export async function deployToArcher(
     content.modules?.[0]?.name ||
     "ArcherPilot Application";
 
-  // ── STEP 2: Create Application ───────────────────────────────────────────
+  // ── STEP 2: Version Check ────────────────────────────────────────────────
+  await onStep("Version Check", "Checking Archer version…");
+  const version = await getArcherVersion(baseUrl, token);
+  await onStep("Version Check", `Archer version: ${version}`, "ok");
+
+  // ── STEP 3: Create Application ───────────────────────────────────────────
   let applicationId: number | null = null;
   await onStep("Creating Application", `Creating application: ${appName}`);
   try {
@@ -477,7 +638,7 @@ export async function deployToArcher(
     await onStep("Creating Application", err.message, "warn");
   }
 
-  // ── STEP 3: Create Modules (Levels) ──────────────────────────────────────
+  // ── STEP 4: Create Modules (Levels) ──────────────────────────────────────
   const levelIds: number[] = [];
   const levelIdByModule: Record<string, number> = {};
   await onStep("Creating Modules", `Creating ${content.modules?.length ?? 0} module(s)…`);
