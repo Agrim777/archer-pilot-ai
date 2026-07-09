@@ -19,16 +19,21 @@ const router = Router();
  * expose creation endpoints for application structure.
  */
 function buildApplicationBuilderGuide(projectName: string, content: Record<string, unknown> | null): string {
-  const impl = content ?? {};
-  const modules = Array.isArray(impl.modules) ? (impl.modules as any[]) : [];
-  const fields = Array.isArray(impl.fields) ? (impl.fields as any[]) : [];
-  const valueLists = Array.isArray(impl.valueLists) ? (impl.valueLists as any[]) : [];
-  const crossRefs = Array.isArray(impl.crossReferences) ? (impl.crossReferences as any[]) : [];
-  const workflow = (impl.workflow ?? {}) as any;
-  const permissions = Array.isArray(impl.recordPermissions) ? (impl.recordPermissions as any[]) : [];
-  const notifications = Array.isArray(impl.notifications) ? (impl.notifications as any[]) : [];
-  const reports = Array.isArray(impl.reports) ? (impl.reports as any[]) : [];
-  const dashboards = Array.isArray(impl.dashboards) ? (impl.dashboards as any[]) : [];
+  // Only keep plain-object, non-null entries; anything malformed (null, string,
+  // number) is silently dropped rather than throwing mid-export.
+  const asObjectArray = (v: unknown): Record<string, any>[] =>
+    Array.isArray(v) ? v.filter((x): x is Record<string, any> => x !== null && typeof x === "object") : [];
+
+  const impl = (content ?? {}) as Record<string, unknown>;
+  const modules = asObjectArray(impl.modules);
+  const fields = asObjectArray(impl.fields);
+  const valueLists = asObjectArray(impl.valueLists);
+  const crossRefs = asObjectArray(impl.crossReferences);
+  const workflow = (impl.workflow && typeof impl.workflow === "object" ? impl.workflow : {}) as any;
+  const permissions = asObjectArray(impl.recordPermissions);
+  const notifications = asObjectArray(impl.notifications);
+  const reports = asObjectArray(impl.reports);
+  const dashboards = asObjectArray(impl.dashboards);
 
   const md: string[] = [];
   const h = (n: number, t: string) => md.push(`${"#".repeat(n)} ${t}`, "");
