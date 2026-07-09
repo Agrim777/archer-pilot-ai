@@ -11,6 +11,144 @@ import { parseId } from "../lib/parseId";
 
 const router = Router();
 
+/**
+ * Build a step-by-step manual build guide, ordered to match RSA Archer's
+ * Application Builder wizard exactly, so a human can click through it in
+ * ~15-20 minutes instead of designing the app from scratch. This is the
+ * reliable fallback for Archer versions (like 6.15) whose REST API does not
+ * expose creation endpoints for application structure.
+ */
+function buildApplicationBuilderGuide(projectName: string, content: Record<string, unknown> | null): string {
+  const impl = content ?? {};
+  const modules = Array.isArray(impl.modules) ? (impl.modules as any[]) : [];
+  const fields = Array.isArray(impl.fields) ? (impl.fields as any[]) : [];
+  const valueLists = Array.isArray(impl.valueLists) ? (impl.valueLists as any[]) : [];
+  const crossRefs = Array.isArray(impl.crossReferences) ? (impl.crossReferences as any[]) : [];
+  const workflow = (impl.workflow ?? {}) as any;
+  const permissions = Array.isArray(impl.recordPermissions) ? (impl.recordPermissions as any[]) : [];
+  const notifications = Array.isArray(impl.notifications) ? (impl.notifications as any[]) : [];
+  const reports = Array.isArray(impl.reports) ? (impl.reports as any[]) : [];
+  const dashboards = Array.isArray(impl.dashboards) ? (impl.dashboards as any[]) : [];
+
+  const md: string[] = [];
+  const h = (n: number, t: string) => md.push(`${"#".repeat(n)} ${t}`, "");
+  const li = (t: string) => md.push(`- ${t}`);
+
+  h(1, `${projectName} — Archer Application Builder Guide`);
+  md.push(
+    "> Follow these steps in order inside **Archer → Manage → Application Builder**.",
+    "> Each section matches a screen in the Application Builder wizard, so you can build this application manually in one pass.",
+    ""
+  );
+
+  if (impl.businessOverview) {
+    h(2, "Business Overview");
+    md.push(String(impl.businessOverview), "");
+  }
+  if (Array.isArray(impl.useCases) && impl.useCases.length) {
+    h(2, "Use Cases");
+    (impl.useCases as string[]).forEach((uc) => li(uc));
+    md.push("");
+  }
+
+  h(2, "Step 1 — Create the Application");
+  md.push(
+    "In **Application Builder → Manage Applications → Add New → Application**, enter:",
+    ""
+  );
+  li(`**Name:** ${projectName}`);
+  if (impl.applicationStructure && typeof impl.applicationStructure === "object") {
+    for (const [k, v] of Object.entries(impl.applicationStructure as Record<string, unknown>)) {
+      if (v != null && typeof v !== "object") li(`**${k}:** ${v}`);
+    }
+  }
+  md.push("");
+
+  if (modules.length) {
+    h(2, "Step 2 — Create Levels / Modules");
+    md.push("For each level below, use **Manage → Levels → Add New Level**:", "");
+    modules.forEach((m, i) => {
+      md.push(`${i + 1}. **${m.name ?? `Level ${i + 1}`}**${m.description ? ` — ${m.description}` : ""}`);
+    });
+    md.push("");
+  }
+
+  if (valueLists.length) {
+    h(2, "Step 3 — Create Value Lists");
+    md.push("In **Manage → Values Lists → Add New**, create these before adding fields that reference them:", "");
+    valueLists.forEach((vl) => {
+      md.push(`**${vl.name ?? "Unnamed Value List"}**`);
+      const values = Array.isArray(vl.values) ? vl.values : Array.isArray(vl.options) ? vl.options : [];
+      values.forEach((v: any) => li(typeof v === "string" ? v : v?.name ?? JSON.stringify(v)));
+      md.push("");
+    });
+  }
+
+  if (fields.length) {
+    h(2, "Step 4 — Add Fields");
+    md.push("In the target level's **Manage Fields** screen, add these fields in order (this also determines the Layout tab order):", "");
+    md.push("| # | Field Name | Type | Value List | Required |", "|---|---|---|---|---|");
+    fields.forEach((f, i) => {
+      md.push(
+        `| ${i + 1} | ${f.name ?? "—"} | ${f.type ?? "Text"} | ${f.valueList ?? f.valuesList ?? "—"} | ${f.required ? "Yes" : "No"} |`
+      );
+    });
+    md.push("");
+  }
+
+  if (crossRefs.length) {
+    h(2, "Step 5 — Cross-References");
+    md.push("Both target applications must already exist before adding these. In **Manage Fields → Add New → Cross-Reference**:", "");
+    crossRefs.forEach((cr) => {
+      li(`**${cr.name ?? "Cross-Reference"}** → target application: ${cr.targetApplication ?? cr.target ?? "—"}${cr.description ? ` (${cr.description})` : ""}`);
+    });
+    md.push("");
+  }
+
+  if (workflow && (workflow.stages || workflow.name)) {
+    h(2, "Step 6 — Workflow (Workflow Manager)");
+    md.push("Open **Manage → Workflow → Create New Workflow** and add these stages in order:", "");
+    const stages = Array.isArray(workflow.stages) ? workflow.stages : [];
+    stages.forEach((s: any, i: number) => {
+      md.push(`${i + 1}. **${typeof s === "string" ? s : s.name ?? `Stage ${i + 1}`}**${typeof s === "object" && s.description ? ` — ${s.description}` : ""}`);
+    });
+    md.push("", "Attach the workflow to the application under **Application Properties → Workflow**.", "");
+  }
+
+  if (permissions.length) {
+    h(2, "Step 7 — Record Permissions");
+    md.push("In **Manage → Access Roles**, create/assign these roles:", "");
+    permissions.forEach((p) => {
+      li(`**${p.group ?? p.role ?? "Group"}** — ${p.access ?? p.permissions ?? p.description ?? "Access as specified"}`);
+    });
+    md.push("");
+  }
+
+  if (notifications.length) {
+    h(2, "Step 8 — Notifications");
+    md.push("In **Manage → Notifications → Add New**, create these rules:", "");
+    notifications.forEach((n) => {
+      li(`**${n.name ?? "Notification"}** — trigger: ${n.trigger ?? n.event ?? "—"}, recipients: ${n.recipients ?? "—"}`);
+    });
+    md.push("");
+  }
+
+  if (reports.length) {
+    h(2, "Step 9 — Reports");
+    reports.forEach((r) => li(`**${r.name ?? "Report"}**${r.description ? ` — ${r.description}` : ""}`));
+    md.push("");
+  }
+
+  if (dashboards.length) {
+    h(2, "Step 10 — Dashboards");
+    dashboards.forEach((d) => li(`**${d.name ?? "Dashboard"}**${d.description ? ` — ${d.description}` : ""}`));
+    md.push("");
+  }
+
+  md.push("---", `_Generated by ArcherPilot AI — designed to be built manually in Archer Application Builder, no trace of AI in the final application._`);
+  return md.join("\n");
+}
+
 // GET /projects
 router.get("/projects", requireAuth, async (req, res) => {
   const r = req as AuthenticatedRequest;
@@ -283,15 +421,8 @@ router.post("/projects/:id/export", requireAuth, async (req, res) => {
         mimeType = "application/json";
         break;
       case "markdown": {
-        const impl = content as Record<string, unknown> | null;
-        const md = [`# ${project.name}`, "", `## Business Overview`, impl?.businessOverview ?? "", ""];
-        if (Array.isArray(impl?.useCases)) {
-          md.push("## Use Cases");
-          (impl.useCases as string[]).forEach((uc) => md.push(`- ${uc}`));
-          md.push("");
-        }
-        exportContent = md.join("\n");
-        filename += ".md";
+        exportContent = buildApplicationBuilderGuide(project.name, content);
+        filename += "_build_guide.md";
         mimeType = "text/markdown";
         break;
       }

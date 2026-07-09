@@ -492,7 +492,7 @@ export const ListDeploymentsResponseItem = zod.object({
   "status": zod.enum(['pending', 'running', 'completed', 'failed', 'simulated']),
   "steps": zod.array(zod.object({
   "name": zod.string(),
-  "status": zod.enum(['pending', 'running', 'completed', 'failed']),
+  "status": zod.enum(['pending', 'running', 'completed', 'failed', 'warning']),
   "message": zod.string().nullish()
 })),
   "error": zod.string().nullish(),
@@ -519,7 +519,7 @@ export const StartDeploymentResponse = zod.object({
   "status": zod.enum(['pending', 'running', 'completed', 'failed', 'simulated']),
   "steps": zod.array(zod.object({
   "name": zod.string(),
-  "status": zod.enum(['pending', 'running', 'completed', 'failed']),
+  "status": zod.enum(['pending', 'running', 'completed', 'failed', 'warning']),
   "message": zod.string().nullish()
 })),
   "error": zod.string().nullish(),
@@ -543,7 +543,7 @@ export const GetDeploymentResponse = zod.object({
   "status": zod.enum(['pending', 'running', 'completed', 'failed', 'simulated']),
   "steps": zod.array(zod.object({
   "name": zod.string(),
-  "status": zod.enum(['pending', 'running', 'completed', 'failed']),
+  "status": zod.enum(['pending', 'running', 'completed', 'failed', 'warning']),
   "message": zod.string().nullish()
 })),
   "error": zod.string().nullish(),

@@ -1,6 +1,6 @@
 import { AppLayout } from "@/components/layout";
 import { useParams, Link } from "wouter";
-import { useGetProject, useUpdateProject } from "@workspace/api-client-react";
+import { useGetProject, useUpdateProject, useExportProject } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -121,6 +121,28 @@ export default function ProjectDetailPage() {
     query: { enabled: !!id, queryKey: getGetProjectQueryKey(id) }
   });
   const updateProject = useUpdateProject();
+  const exportProject = useExportProject();
+
+  const handleExport = (format: "json" | "markdown" | "archer-package") => {
+    exportProject.mutate({ id, data: { format } }, {
+      onSuccess: (res) => {
+        const bytes = atob(res.content);
+        const arr = new Uint8Array(bytes.length);
+        for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+        const blob = new Blob([arr], { type: res.mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = res.filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        toast({ title: "Export ready", description: res.filename });
+      },
+      onError: (err) => toast({ title: "Export failed", description: err.message, variant: "destructive" }),
+    });
+  };
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -219,9 +241,9 @@ export default function ProjectDetailPage() {
                 <Button variant="outline" size="sm"><Download className="h-3.5 w-3.5 mr-1.5" /> Export</Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem>Export as JSON</DropdownMenuItem>
-                <DropdownMenuItem>Export as Markdown Spec</DropdownMenuItem>
-                <DropdownMenuItem>Export as Archer Package (.zip)</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleExport("json")}>Export as JSON</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleExport("markdown")}>Download Build Guide (manual steps)</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleExport("archer-package")}>Export as Archer Package (experimental)</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
             <Button size="sm" asChild>

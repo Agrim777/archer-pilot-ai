@@ -798,7 +798,7 @@ components:
           type: string
         status:
           type: string
-          enum: [pending, running, completed, failed]
+          enum: [pending, running, completed, failed, warning]
         message:
           type: ["string", "null"]
       required: [name, status]

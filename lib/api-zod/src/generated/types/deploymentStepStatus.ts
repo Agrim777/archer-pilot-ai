@@ -14,4 +14,5 @@ export const DeploymentStepStatus = {
   running: 'running',
   completed: 'completed',
   failed: 'failed',
+  warning: 'warning',
 } as const;
