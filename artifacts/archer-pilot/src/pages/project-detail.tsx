@@ -138,7 +138,11 @@ export default function ProjectDetailPage() {
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
-        toast({ title: "Export ready", description: res.filename });
+        toast({
+          title: res.experimental ? "Experimental export ready" : "Export ready",
+          description: res.warning ?? res.filename,
+          variant: res.experimental ? "destructive" : "default",
+        });
       },
       onError: (err) => toast({ title: "Export failed", description: err.message, variant: "destructive" }),
     });

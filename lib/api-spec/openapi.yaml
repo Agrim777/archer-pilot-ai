@@ -581,6 +581,10 @@ components:
           type: string
         mimeType:
           type: string
+        experimental:
+          type: boolean
+        warning:
+          type: string
       required: [format, filename, content, mimeType]
 
     # ── Archer Implementation (AI-generated structure) ───────────────────────

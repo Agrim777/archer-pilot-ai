@@ -310,7 +310,9 @@ export const ExportProjectResponse = zod.object({
   "format": zod.string(),
   "filename": zod.string(),
   "content": zod.string(),
-  "mimeType": zod.string()
+  "mimeType": zod.string(),
+  "experimental": zod.boolean().optional(),
+  "warning": zod.string().optional()
 })
 
 

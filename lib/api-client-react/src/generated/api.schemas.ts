@@ -134,6 +134,8 @@ export interface ExportResult {
   filename: string;
   content: string;
   mimeType: string;
+  experimental?: boolean;
+  warning?: string;
 }
 
 export interface GenerateInput {
