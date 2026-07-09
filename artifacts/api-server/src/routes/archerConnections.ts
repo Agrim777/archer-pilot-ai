@@ -7,7 +7,7 @@ import {
 } from "@workspace/api-zod";
 import { requireAuth, type AuthenticatedRequest } from "../middlewares/auth";
 import { parseId } from "../lib/parseId";
-import { archerLogin, archerLogout, getArcherVersion } from "../lib/archerClient";
+import { archerLogin, archerLogout, getArcherVersion, normalizeArcherBaseUrl } from "../lib/archerClient";
 
 const router = Router();
 
@@ -49,7 +49,11 @@ router.post("/archer-connections", requireAuth, async (req, res) => {
   try {
     const [conn] = await db
       .insert(archerConnections)
-      .values({ ...parsed.data, userId: r.userId })
+      .values({
+        ...parsed.data,
+        url: normalizeArcherBaseUrl(parsed.data.url),
+        userId: r.userId,
+      })
       .returning();
 
     res.status(201).json({
@@ -114,9 +118,11 @@ router.put("/archer-connections/:id", requireAuth, async (req, res) => {
   }
 
   try {
+    const normalized = { ...parsed.data };
+    if (normalized.url) normalized.url = normalizeArcherBaseUrl(normalized.url);
     const [updated] = await db
       .update(archerConnections)
-      .set({ ...parsed.data, updatedAt: new Date() })
+      .set({ ...normalized, updatedAt: new Date() })
       .where(and(eq(archerConnections.id, id), eq(archerConnections.userId, r.userId)))
       .returning();
 

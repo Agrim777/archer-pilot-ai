@@ -81,6 +81,42 @@ function archerFieldType(typeStr: string): number {
   return FIELD_TYPE_MAP[typeStr] ?? 1; // default Text
 }
 
+/**
+ * Normalize a user-entered Archer URL down to the instance base URL that the
+ * REST API expects (protocol + host [+ instance path segment], no trailing
+ * slash, no UI page paths).
+ *
+ * Users often copy a URL straight from their browser, e.g.:
+ *   http://45.129.87.206/Archer/apps/ArcherApp/Home.aspx
+ * The API base is everything up to (and including) the instance segment:
+ *   http://45.129.87.206/Archer
+ * We strip any `/apps/...`, `/platformapi/...`, `/api/...`, or `.aspx` page
+ * paths that got pasted in along with the instance URL.
+ */
+export function normalizeArcherBaseUrl(rawUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(rawUrl.trim());
+  } catch {
+    return rawUrl.trim().replace(/\/+$/, "");
+  }
+
+  // Cut the path at the first segment that is clearly not part of the
+  // instance base (UI app routes, API roots, or a .aspx/.html page).
+  const cutPatterns = [/^apps$/i, /^platformapi$/i, /^api$/i];
+  const segments = url.pathname.split("/").filter(Boolean);
+  const keep: string[] = [];
+  for (const seg of segments) {
+    if (cutPatterns.some((p) => p.test(seg)) || /\.(aspx|html?)$/i.test(seg)) {
+      break;
+    }
+    keep.push(seg);
+  }
+
+  const path = keep.length ? `/${keep.join("/")}` : "";
+  return `${url.protocol}//${url.host}${path}`;
+}
+
 // ── HTTP helpers ──────────────────────────────────────────────────────────
 
 function authHeader(token: string) {
